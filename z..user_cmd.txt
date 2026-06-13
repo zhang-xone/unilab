@@ -1,0 +1,93 @@
+# ==================== 基础开始训练模板 ====================
+uv run train \
+--algo ppo \
+--task go2_joystick_flat \
+--sim mujoco \
+algo.max_iterations=200 \
+algo.num_steps_per_env=24 \
+algo.num_envs=4096 \
+algo.save_interval=50 \
+algo.load_run="-1" \
+algo.checkpoint=-1 \
+training.no_play=true \
+training.play_steps=200 \
+training.play_render_mode=auto \
+training.logger=tensorboard \
+training.device=null
+# ========================================================
+# 参数详解：
+#   --algo ppo           : 使用PPO算法 #
+#   --task go2_joystick_flat : 任务为Go2摇杆控制 #
+#   --sim mujoco         : 使用MuJoCo后端 #
+#   algo.max_iterations=200 : 训练200轮 #
+#   algo.num_steps_per_env=24 : 每环境每轮采集24步
+#   algo.num_envs=4096   : 4096个并行环境
+#   algo.save_interval=50 : 每50轮保存一次checkpoint
+#   algo.load_run="-1"   : 加载最新训练结果（继续训练）
+#   algo.checkpoint=-1   : 使用最新检查点
+#   training.no_play=true : 关闭回放（加速训练） #
+#   training.play_steps=200 : 回放200步
+#   training.play_render_mode=auto : 自动渲染模式
+#   training.logger=tensorboard : 使用TensorBoard记录日志
+#   training.device=null  : 自动选择gpu/cpu训练
+# ========================================================
+
+
+# ========================================================
+# 【脚本用途】mujoco 交互式可视化
+# 【使用说明】直接复制下方命令到终端运行
+# ========================================================
+uv run scripts/play_interactive.py \
+--algo ppo \
+--task go2_joystick_flat \
+--sim mujoco \
+algo.load_run=-1 \
+algo.checkpoint=-1 \
+interactive.action_mode=policy \
+interactive.keyboard=true \
+algo.num_envs=1 \
+training.device=null \
+interactive.speed=1.0
+# ========================================================
+# 参数说明：
+#   --algo ppo           : 算法名称（ppo/appo/sac/td3）
+#   --task go2_joystick_flat : 任务名称（Go2摇杆控制）
+#   --sim mujoco         : 仿真后端（mujoco/motrix）
+#   algo.load_run=-1     : 加载的运行ID（-1=最新）
+#   algo.checkpoint=-1   : 检查点编号（-1=最新）
+#   interactive.action_mode=policy : 动作模式（policy/zero/random）
+#   interactive.keyboard=true : 启用键盘控制
+#   algo.num_envs=1      : 并行环境数（建议设为1）
+#   training.device=null  : 运行设备（cpu/cuda:0）
+#   interactive.speed=1.0 : 仿真速度（0.1~5.0）
+# ======================================================== 
+mujoco测试
+cd /home/xxx/ubuntu_software/unilab/UniLab
+
+uv run python << 'EOF'
+import mujoco
+import mujoco.viewer
+
+# 从 XML 文件加载（会读取最新的修改）
+model = mujoco.MjModel.from_xml_path('src/unilab/assets/robots/cod_2026_balance/cod_2026_balance.xml')
+data = mujoco.MjData(model)
+print('🚀 MuJoCo 查看器启动')
+print(f'✅ 加载模型: {model.ngeom} 个几何体, {model.njnt} 个关节')
+print()
+print('=== 主关节限位（确认是 ±2 rad） ===')
+for i in range(model.njnt):
+    jnt_name = model.joint(i).name
+    if 'child' not in jnt_name and 'Wheel' not in jnt_name:
+        jnt_range = model.jnt_range[i]
+        print(f'  {jnt_name:25s} [{jnt_range[0]:.2f}, {jnt_range[1]:.2f}] rad')
+
+print()
+print('💡 操作:')
+print('   - 左键拖动身体部位')
+print('   - 或用右侧控制面板的滑块直接设置关节角度')
+print('   - 空格键暂停/播放')
+
+with mujoco.viewer.launch(model, data) as viewer:
+    while viewer.is_running():
+        mujoco.mj_step(model, data)
+EOF

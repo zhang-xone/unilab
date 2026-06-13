@@ -33,7 +33,7 @@ except ImportError:
 
 def _default_xml() -> str:
     candidates = [
-        Path("src/unilab/assets/robots/go2/scene_flat.xml"),
+        Path("src/unilab/assets/robots/go2/"),
         Path("benchmark/xmls/humanoid/humanoid.xml"),
     ]
     for path in candidates:
