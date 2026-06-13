@@ -1,5 +1,37 @@
 # Python
 __pycache__/
+# 虚拟环境（7.4G超大文件夹）
+.venv/
+venv/
+
+# 日志缓存
+logs/
+*.log
+
+# 压缩包备份
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Python缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 运行生成文件
+build/
+dist/
+*.egg-info
+
+# 系统隐藏文件
+.DS_Store
+.Thumbs.db
+
+# 大体积仿真备份（可选，如果里面是重复模型）
+*_backup.obj
+*_backup.stl
 dist/
 .eggs/
 *.egg-info/
@@ -89,3 +121,5 @@ src/unilab/assets/checkpoints/**/*.onnx
 
 # Backend temp XML emitted next to robot.xml (motrix/mujoco scene materialization)
 src/unilab/assets/robots/**/tmp*.xml
+
+COD-2026RoboMaster-Balance-Simulation_File/
