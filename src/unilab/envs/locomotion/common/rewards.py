@@ -34,7 +34,9 @@ class RewardContext:
     dof_pos: np.ndarray  # (N, num_action)
     num_envs: int = 0
     default_angles: np.ndarray = field(default_factory=lambda: np.empty(0))
-    tracking_sigma: float = 0.25
+    tracking_sigma: float = 0.25  # 兼容老配置：当 lin/ang 未设置时回退到这个值
+    tracking_sigma_lin: float | None = None
+    tracking_sigma_ang: float | None = None
     base_height_target: float = 0.0
     base_height: np.ndarray = field(default_factory=lambda: np.empty(0))  # pre-fetched
 
@@ -57,14 +59,16 @@ def tracking_lin_vel(ctx: RewardContext) -> np.ndarray:
     """Exponential reward for tracking commanded xy linear velocity."""
     commands = ctx.info["commands"]
     lin_vel_error = np.sum(np.square(commands[:, :2] - ctx.linvel[:, :2]), axis=1)
-    return np.exp(-lin_vel_error / ctx.tracking_sigma)  # type: ignore[no-any-return]
+    sigma = ctx.tracking_sigma_lin if ctx.tracking_sigma_lin is not None else ctx.tracking_sigma
+    return np.exp(-lin_vel_error / sigma)  # type: ignore[no-any-return]
 
 
 def tracking_ang_vel(ctx: RewardContext) -> np.ndarray:
     """Exponential reward for tracking commanded yaw angular velocity."""
     commands = ctx.info["commands"]
     ang_vel_error = np.square(commands[:, 2] - ctx.gyro[:, 2])
-    return np.exp(-ang_vel_error / ctx.tracking_sigma)  # type: ignore[no-any-return]
+    sigma = ctx.tracking_sigma_ang if ctx.tracking_sigma_ang is not None else ctx.tracking_sigma
+    return np.exp(-ang_vel_error / sigma)  # type: ignore[no-any-return]
 
 
 def forward_progress(ctx: RewardContext) -> np.ndarray:
@@ -280,14 +284,16 @@ def track_lin_vel_xy_yaw_frame_exp(ctx: RewardContext) -> np.ndarray:
     linvel = ctx.linvel_yaw if ctx.linvel_yaw is not None else ctx.linvel
     commands = ctx.info["commands"]
     lin_vel_error = np.sum(np.square(commands[:, :2] - linvel[:, :2]), axis=1)
-    return np.asarray(np.exp(-lin_vel_error / ctx.tracking_sigma), dtype=get_global_dtype())
+    sigma = ctx.tracking_sigma_lin if ctx.tracking_sigma_lin is not None else ctx.tracking_sigma
+    return np.asarray(np.exp(-lin_vel_error / sigma), dtype=get_global_dtype())
 
 
 def track_ang_vel_z_world_exp(ctx: RewardContext) -> np.ndarray:
     """Exponential tracking of yaw angular velocity (world frame)."""
     commands = ctx.info["commands"]
     ang_vel_error = np.square(commands[:, 2] - ctx.gyro[:, 2])
-    return np.asarray(np.exp(-ang_vel_error / ctx.tracking_sigma), dtype=get_global_dtype())
+    sigma = ctx.tracking_sigma_ang if ctx.tracking_sigma_ang is not None else ctx.tracking_sigma
+    return np.asarray(np.exp(-ang_vel_error / sigma), dtype=get_global_dtype())
 
 
 def feet_air_time_positive_biped(

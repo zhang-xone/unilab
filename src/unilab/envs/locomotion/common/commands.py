@@ -17,6 +17,7 @@ class Commands:
             [1.0, 0.4, 0.8],  # [vx_max, vy_max, vyaw_max]
         ]
     )
+    height_limit: list[float] = field(default_factory=lambda: [0.28, 0.32])
     resampling_time: float = 0.0
     heading_command: bool = False
     heading_range: list[float] = field(default_factory=lambda: [-3.14, 3.14])

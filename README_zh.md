@@ -87,6 +87,9 @@ git clone https://github.com/unilabsim/UniLab.git
 cd UniLab
 
 # 2. 安装依赖
+#安装Git LFS才能完整下载机器人模型资源
+git lfs install
+git lfs pull
 # 请按你的平台选择对应的安装命令。
 
 # Linux CUDA 或 macOS

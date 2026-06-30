@@ -18,8 +18,11 @@
 
   <worldbody>
     <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
-    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" contype="1" conaffinity="2"/>
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" contype="1" conaffinity="1" friction="2.0 0.005 0.0001"/>
   </worldbody>
 
-  <!-- 不重复定义 keyframe，使用机器人文件中的 -->
+  <keyframe>
+    <key name="home" qpos="0.000000 0.000000 0.400000 1.000000 0.000000 0.000000 0.000000 0.239130 -0.520634 0.284200 -0.486861 -0.519644 0.563946 -0.874393 0.162861 -0.480007 0.287870 -0.455611 -0.497974 0.507563 0.334914" />
+  </keyframe>
+  
 </mujoco>

@@ -64,30 +64,58 @@ interactive.speed=1.0
 mujoco测试
 cd /home/xxx/ubuntu_software/unilab/UniLab
 
+# 测试模型加载
 uv run python << 'EOF'
 import mujoco
 import mujoco.viewer
 
-# 从 XML 文件加载（会读取最新的修改）
-model = mujoco.MjModel.from_xml_path('src/unilab/assets/robots/cod_2026_balance/cod_2026_balance.xml')
+model = mujoco.MjModel.from_xml_path('src/unilab/assets/robots/cod_2026_balance/scene_flat.xml')
 data = mujoco.MjData(model)
-print('🚀 MuJoCo 查看器启动')
-print(f'✅ 加载模型: {model.ngeom} 个几何体, {model.njnt} 个关节')
+
+print('=== 模型信息 ===')
+print(f'  nq (自由度): {model.nq}')
+print(f'  nu (执行器): {model.nu}')
+print(f'  ngeom (碰撞体): {model.ngeom}')
+print(f'  qpos 长度: {len(data.qpos)}')
 print()
-print('=== 主关节限位（确认是 ±2 rad） ===')
-for i in range(model.njnt):
-    jnt_name = model.joint(i).name
-    if 'child' not in jnt_name and 'Wheel' not in jnt_name:
-        jnt_range = model.jnt_range[i]
-        print(f'  {jnt_name:25s} [{jnt_range[0]:.2f}, {jnt_range[1]:.2f}] rad')
+
+# 检查 home keyframe
+print('=== home keyframe ===')
+for i in range(model.nkey):
+    name = model.key(i).name
+    print(f'  [{i}] {name}: qpos = {model.key_qpos[i]}')
 
 print()
-print('💡 操作:')
-print('   - 左键拖动身体部位')
-print('   - 或用右侧控制面板的滑块直接设置关节角度')
-print('   - 空格键暂停/播放')
+print('=== 应用 home keyframe ===')
+data.qpos = model.key_qpos[0]  # 应用 home
+print(f'  base 位置: x={data.qpos[0]:.2f}, y={data.qpos[1]:.2f}, z={data.qpos[2]:.2f}')
+print(f'  前 3 个关节角度: {data.qpos[7]:.2f}, {data.qpos[8]:.2f}, {data.qpos[9]:.2f}')
+
+mujoco.mj_forward(model, data)
+
+print()
+print('=== 碰撞检查 ===')
+print(f'  接触点数量: {data.ncon}')
+for k in range(data.ncon):
+    contact = data.contact[k]
+    name1 = model.geom(contact.geom1).name
+    name2 = model.geom(contact.geom2).name
+    print(f'  接触 {k}: {name1} ↔ {name2}')
+
+print()
+print('=== 关节列表 ===')
+for i in range(model.njnt):
+    if i == 0:
+        continue  # 跳过 free joint
+    name = model.joint(i).name
+    q_idx = model.jnt_qposadr[i]
+    print(f'  [{i}] {name:30s} qpos[{q_idx}] = {data.qpos[q_idx]:.4f} rad')
+
+print()
+print('🚀 启动查看器！')
+print('💡 按 Tab 打开控制面板，拖动 ctrl 滑块可以控制电机')
 
 with mujoco.viewer.launch(model, data) as viewer:
-    while viewer.is_running():
+    while viewer.is_running:
         mujoco.mj_step(model, data)
 EOF

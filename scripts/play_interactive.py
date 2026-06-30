@@ -877,7 +877,7 @@ def _build_keyboard_commander(env: Any, args) -> KeyboardCommander | None:
         step_lin=float(getattr(args, "keyboard_step_lin", 0.1)),
         step_ang=float(getattr(args, "keyboard_step_ang", 0.2)),
     )
-    env.state.info["commands"][:] = commander.command
+    env.state.info["commands"][:, :3] = commander.command
     return commander
 
 
@@ -1236,7 +1236,7 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
 
                 # Write the command before stepping so this step's obs follow it.
                 if commander is not None and env.state is not None:
-                    env.state.info["commands"][:] = commander.command
+                    env.state.info["commands"][:, :3] = commander.command
 
                 playback_session.advance(controls)
 
