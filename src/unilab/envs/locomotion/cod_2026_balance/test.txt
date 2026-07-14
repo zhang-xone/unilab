@@ -11,9 +11,10 @@ PYTHONUNBUFFERED=1 uv run train \
   --algo ppo \
   --task cod_2026_joystick_flat \
   --sim mujoco \
-  algo.load_run="2026-06-30_13-27-59_mujoco" \
+  algo.load_run="2026-07-06_22-53-56_mujoco" \
   algo.checkpoint=-1 \
   algo.max_iterations=700 \
   algo.num_steps_per_env=24 \
   training.no_play=true \
   training.logger=tensorboard
+  

@@ -26,8 +26,8 @@
       <joint name="base_joint" type="free" />
       <inertial pos="0 0 0" mass="16.4" diaginertia="0.01 0.01 0.01" />
       <site name="base_site" pos="0 0 0" size="0.01"/>
-      <geom type="mesh" rgba="1 1 1 1" mesh="base_link" contype="0" conaffinity="0"/>
-      <geom type="box" size="0.28 0.12 0.10" pos="-0.02 0 -0.1" rgba="1 1 1 0.5"/>
+      <geom type="mesh" rgba="1 1 1 0.75" mesh="base_link" contype="0" conaffinity="0"/>
+      <geom name="base_box" type="box" size="0.28 0.12 0.10" pos="-0.02 0 -0.1" rgba="0.75 0.75 0.75 0.5"/>
 
       <body name="Right_front_link" pos="-0.0193914 -0.1837 -0.05">
         <inertial pos="0.032009 -0.002932 -0.003563" quat="0.472786 0.528055 0.525808 0.470275" mass="0.7" diaginertia="0.000152893 0.000125485 2.9469e-05" />
@@ -150,11 +150,13 @@
   <sensor>
     <gyro name="gyro" site="base_site"/>
     <accelerometer name="accel" site="base_site"/>
-    <subtreelinvel name="local_linvel" body="base"/>
+    <velocimeter name="local_linvel" site="base_site"/>
     <framepos name="base_pos" objtype="body" objname="base"/>
     <framezaxis name="upvector" objtype="body" objname="base"/>
     <framepos name="right_wheel_pos" objtype="body" objname="Right_Wheel_link" reftype="body" refname="base"/>
     <framepos name="left_wheel_pos" objtype="body" objname="Left_Wheel_link" reftype="body" refname="base"/>
+
+    <touch name="base_body_touch" site="base_site"/>
 
     <jointpos name="Right_front_joint_pos" joint="Right_front_joint"/>
     <jointpos name="Right_rear_joint_pos" joint="Right_rear_joint"/>

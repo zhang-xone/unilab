@@ -1,0 +1,122 @@
+# @package _global_
+training:
+  task_name: Cod2026JoystickFlat
+  sim_backend: mujoco
+  device: cuda
+  play_steps: 500
+  play_env_num: 4
+  render_spacing: 0.0
+  cam_tracking: true
+  cam_tracking_env_idx: 0
+  cam_tracking_extra_envs: 3
+
+interactive:
+  action_mode: policy
+  policy_obs_mode: auto
+  camera_follow_body: true
+  use_env_visual_model: false
+
+algo:
+  num_envs: 1536
+  num_steps_per_env: 24
+  max_iterations: 1000
+  empirical_normalization: true
+  obs_groups:
+    actor: [actor]
+    critic: [actor]
+  policy:
+    init_noise_std: 0.65
+    actor_hidden_dims: [256, 256]
+    critic_hidden_dims: [256, 256]
+    activation: elu
+    class_name: ActorCritic
+  algorithm:
+    learning_rate: 3.0e-4
+    entropy_coef: 0.01
+
+env:
+  scene:
+    model_file: src/unilab/assets/robots/cod_2026_balance/scene_flat.xml
+  sim_dt: 0.002
+  ctrl_dt: 0.02
+  sensor:
+    gyro: gyro
+    accel: accel
+    local_linvel: local_linvel
+    upvector: upvector
+  commands:
+    vel_limit:
+      - [-0.5, 0, -0.5]
+      - [0.5, 0, 0.5]
+    height_limit:
+      - 0.28
+      - 0.32
+    resampling_time: 10.0
+    rel_standing_envs: 0.0   # 所有环境都要动，不允许"站着不动"
+  control_config:
+    leg_kp: [40, 40, 40, 40]
+    leg_kd: [3.0, 3.0, 3.0, 3.0]
+    wheel_kd: [1.4, 1.4]
+    action_scale: 0.5
+    wheel_action_scale: 15.0
+    clip_actions: 1.0
+    simulate_action_latency: false
+  domain_rand:
+    randomize_base_mass: true
+    added_mass_range: [-1.5, 1.5]
+    randomize_ground_friction: true
+    ground_friction_multiplier_range: [0.7, 1.3]
+    randomize_dof_armature: true
+    dof_armature_multiplier_range: [0.9, 1.1]
+    push_robots: true
+    push_interval_initial: 400
+    push_interval_final: 400
+    max_force: [8.0, 8.0, 10]
+    leg_max_force: [ 3.0, 3.0, 1]
+    push_body_name: "base"
+    # ---- 课程学习：从 step=warmup 开始从 initial_scale 增长到 full_steps 时达到 1.0 ----
+    curriculum_enabled: true
+    curriculum_warmup_steps: 1200        # 前 4800 步用最小扰动，50个Learning iteration
+    curriculum_full_steps: 15600          # 2400步每100个Learning iteration）
+    curriculum_initial_scale: 0.0         # 初始扰动强度：只有 5% 的最大力
+    curriculum_shape: "smooth"             # linear / smooth / quadratic
+reward:
+  scales:
+    # ── 正奖励（优先级 1：高度 > 主任务） ─────────
+    base_height: 3.0           # 高度目标奖励：0cm→+0.06/step, 5cm→+0.022, 10cm→0
+    tracking_lin_vel: 2.0      # 前进/后退跟随：完美→+0.04/step
+    tracking_ang_vel: 1.8      # 转向跟随：完美→+0.016/step
+    alive: 0.5                 # 活着→+0.01/step
+
+    # ── 惩罚 1：倾斜（优先级 2） ───────────────
+    # 10°→fn=0.03→-0.003/step；20°→fn=0.117→-0.012/step；30°→fn=0.25→-0.025/step
+    orientation: -17.0
+
+    # ── 惩罚 2：擦地（优先级 3） ───────────────
+    body_ground_clearance: -50.0
+
+    # ── 惩罚 3：摆角（优先级 4） ───────────────
+    swing_vertical: -0.1       # 10°偏离→-0.009/step, 20°→-0.036/step
+    swing_symmetry: -20.0     # 10°不对称→-0.012/step
+    swing_vel: -0.05
+    stand: -0.3
+
+    # ── 惩罚 4：运动抖动（量级 ≤ 正奖励 5%） ───
+    lin_vel_z: -1.0
+    ang_vel_xy: -0.05
+    roll_on_turn: -0.5
+
+    # ── 惩罚 5：平滑 / 能耗（最小） ───────────
+    action_rate: -0.01
+    dof_torques_l2: -5.0e-5
+    dof_acc_l2: -1.0e-7
+    joint_power: -5.0e-5
+
+  tracking_sigma: 0.25
+  tracking_sigma_lin: 0.2        # 0.45m/s 误差仍拿 13%
+  tracking_sigma_ang: 0.15
+  base_height_sigma: 0.03        # 高度奖励 σ：25cm 偏拿 37%
+  # orientation_stand 的启阈值（从 YAML 可调）
+  stand_cmd_linvel_threshold: 0.3
+  stand_cmd_angvel_threshold: 0.3
+  stand_tilt_threshold: 0.192  # ≈11°
