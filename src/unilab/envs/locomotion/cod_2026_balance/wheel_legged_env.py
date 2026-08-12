@@ -942,4 +942,3 @@ class WheelLeggedEnv:
         tsk_err = self.dof_pos[:,0] - self.commands[:, 5]
         tsk_err += self.dof_pos[:,3] - self.commands[:, 5]
         return torch.square(tsk_err)
-    

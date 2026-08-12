@@ -22,11 +22,28 @@ Camera controls (MuJoCo viewer):
     Mouse drag     - rotate
     Scroll         - zoom
     Right-drag     - pan
+
+Interactive keyboard shortcuts (when keyboard teleop enabled):
+    Up/Down        - forward/backward (vx)
+    Left/Right     - turn left/right (vyaw)
+    M              - toggle mouse yaw control (鼠标左右划控制偏航)
+    Enter          - full stop (zero all commands)
+    Space          - pause/resume
+    Backspace      - reset environment
+    +/-            - speed up/down simulation
+
+Mouse yaw control:
+    When enabled (via ``M`` key or ``interactive.mouse_yaw=true``),
+    moving the mouse horizontally controls the yaw-rate command (vyaw).
+    Sensitivity is adjustable via ``interactive.mouse_yaw_sensitivity``.
 """
 
 # pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportOptionalMemberAccess=false, reportOptionalSubscript=false
 
 import argparse
+import ctypes
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -41,6 +58,11 @@ import torch
 from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import DictConfig, OmegaConf
+
+try:
+    import glfw as _glfw
+except ImportError:
+    _glfw = None
 
 ROOT_DIR = Path(__file__).parent.parent
 SRC_DIR = ROOT_DIR / "src"
@@ -84,6 +106,8 @@ _VELOCITY_ARROW_SCALE = 0.45
 _VELOCITY_ARROW_WIDTH = 0.025
 _VELOCITY_ARROW_LATERAL_OFFSET = 0.0
 _VELOCITY_COMMAND_TASK_NAME_MARKERS = ("Joystick", "Walk")
+
+_DEFAULT_MOUSE_YAW_SENSITIVITY = 0.015  # rad per pixel of mouse movement
 
 ensure_registries()
 
@@ -140,6 +164,9 @@ class PlayInteractiveArgs:
     keyboard_step_lin: float = 0.1
     keyboard_step_ang: float = 0.2
     require_keyboard_command_obs: bool = True
+    mouse_yaw: bool = False
+    mouse_yaw_sensitivity: float = 0.015
+    mouse_yaw_decay: float = 0.85
     algo: str = "ppo"
 
 
@@ -872,12 +899,14 @@ def _build_keyboard_commander(env: Any, args) -> KeyboardCommander | None:
     cmds_cfg.heading_command = False
     cmds_cfg.resampling_time = 0.0
 
+    height_limit = getattr(cmds_cfg, "height_limit", None)
     commander = KeyboardCommander.from_vel_limit(
         cmds_cfg.vel_limit,
         step_lin=float(getattr(args, "keyboard_step_lin", 0.1)),
         step_ang=float(getattr(args, "keyboard_step_ang", 0.2)),
+        height_limit=height_limit,
     )
-    env.state.info["commands"][:, :3] = commander.command
+    env.state.info["commands"][:, :commander.command.shape[0]] = commander.command
     return commander
 
 
@@ -986,18 +1015,27 @@ def _handle_command_key(commander: KeyboardCommander, keycode: int) -> None:
         commander.nudge(commander.AXIS_VYAW, -1.0)
     elif keycode in (_KEY_ENTER, _KEY_KP_ENTER):
         commander.zero()
+    elif keycode in (ord("R"), ord("r")) and commander.has_height:
+        commander.nudge(commander.AXIS_HEIGHT, +1.0)
+    elif keycode in (ord("T"), ord("t")) and commander.has_height:
+        commander.nudge(commander.AXIS_HEIGHT, -1.0)
     else:
         return
     print(f"[play_interactive] {commander.describe()}")
 
 
-def _print_keyboard_legend(args) -> None:
+def _print_keyboard_legend(commander: KeyboardCommander | None, env: Any = None) -> None:
     print("[play_interactive] Keyboard teleop ENABLED (drive style):")
     print("  Up / Down    : forward / backward (vx)")
     print("  Left / Right : turn left / right  (vyaw)")
+    if commander is not None and commander.has_height:
+        print("  R / T        : height up / down")
+    if env is not None:
+        cmds = getattr(getattr(env, "state", None), "info", {}).get("commands")
+        if isinstance(cmds, np.ndarray) and cmds.shape[1] >= 5:
+            print("  H            : trigger jump")
+    print("  M            : toggle mouse yaw (鼠标左右划控制偏航)")
     print("  Enter        : full stop")
-    if str(getattr(args, "action_mode", "")) != "policy":
-        print("  NOTE: action_mode is not 'policy'; commands will not drive the robot.")
 
 
 def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = None):
@@ -1180,7 +1218,56 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
     if commander is not None:
         env.set_autoreset(False)
 
+    mouse_yaw_active = bool(getattr(args, "mouse_yaw", False))
+    mouse_yaw_sensitivity = float(getattr(args, "mouse_yaw_sensitivity", 0.015))
+    mouse_yaw_decay = float(getattr(args, "mouse_yaw_decay", 0.85))
+    mouse_last_x = 0.0
+    mouse_last_y = 0.0
+
+    _x11 = None
+    _x11_display = None
+    _x11_root = None
+    _x11_screen_w = 0
+    _x11_screen_h = 0
+    _xtst = None
+    try:
+        _x11 = ctypes.CDLL("libX11.so.6")
+        _x11.XOpenDisplay.restype = ctypes.c_void_p
+        _x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+        _x11_display = _x11.XOpenDisplay(None)
+        if _x11_display:
+            _x11.XDefaultRootWindow.restype = ctypes.c_void_p
+            _x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+            _x11_root = _x11.XDefaultRootWindow(_x11_display)
+            _x11.XDefaultScreen.restype = ctypes.c_int
+            _x11.XDefaultScreen.argtypes = [ctypes.c_void_p]
+            _screen = _x11.XDefaultScreen(_x11_display)
+            _x11.XDisplayWidth.restype = ctypes.c_int
+            _x11.XDisplayWidth.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            _x11_screen_w = _x11.XDisplayWidth(_x11_display, _screen)
+            _x11.XDisplayHeight.restype = ctypes.c_int
+            _x11.XDisplayHeight.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            _x11_screen_h = _x11.XDisplayHeight(_x11_display, _screen)
+            _x11.XQueryPointer.restype = ctypes.c_int
+            _x11.XQueryPointer.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p),
+                ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+                ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int),
+                ctypes.POINTER(ctypes.c_uint),
+            ]
+            _x11.XFlush.restype = ctypes.c_int
+            _x11.XFlush.argtypes = [ctypes.c_void_p]
+        _xtst = ctypes.CDLL("libXtst.so.6")
+        _xtst.XTestFakeMotionEvent.restype = ctypes.c_int
+        _xtst.XTestFakeMotionEvent.argtypes = [
+            ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_ulong,
+        ]
+    except Exception:
+        _x11_display = None
+
     def _on_key(keycode: int) -> None:
+        nonlocal mouse_yaw_active, mouse_last_x, mouse_last_y
         if keycode == ord(" "):
             paused = controls.toggle_pause()
             status = "paused" if paused else "resumed"
@@ -1197,17 +1284,32 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
         elif keycode in (ord("-"), ord("_")):
             controls.set_speed(controls.speed / 1.25)
             print(f"[play_interactive] speed={controls.speed:.2f}x")
+        elif keycode in (ord("M"), ord("m")):
+            mouse_yaw_active = not mouse_yaw_active
+            mouse_last_x = 0.0
+            mouse_last_y = 0.0
+            status = "ON (mouse 左右划控制 vyaw)" if mouse_yaw_active else "OFF"
+            print(f"[play_interactive] 鼠标偏航控制: {status}")
         elif commander is not None and keycode == _KEY_BACKSPACE:
             playback_session.reset()
             commander.zero()
             print("[play_interactive] reset (backspace)")
+        elif keycode in (ord("H"), ord("h")) and env is not None:
+            cmds = env.state.info.get("commands")
+            if isinstance(cmds, np.ndarray) and cmds.shape[1] >= 5:
+                current = cmds[0, 4]
+                cmds[:, 4] = 0.0 if current > 0.5 else 1.0
+                if current > 0.5:
+                    print("[play_interactive] jump released (H)")
+                else:
+                    print("[play_interactive] jump triggered (H)")
         elif commander is not None:
             _handle_command_key(commander, keycode)
 
     print("[play_interactive] Opening viewer — close the window or press Esc to quit.")
     print("[play_interactive] Controls: Space=pause/resume, N=single-step, +/-=speed")
     if commander is not None:
-        _print_keyboard_legend(args)
+        _print_keyboard_legend(commander, env)
 
     with mujoco.viewer.launch_passive(mj_model, viz_data, key_callback=_on_key) as viewer:
         focus_body_id = _resolve_focus_body_id(
@@ -1234,9 +1336,58 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
             while viewer.is_running():
                 t0 = time.perf_counter()
 
+                # Mouse yaw control: read cursor position via X11 and map horizontal
+                # movement to vyaw when mouse_yaw_active is enabled.
+                if mouse_yaw_active and commander is not None and _x11_display is not None:
+                    try:
+                        root_ret = ctypes.c_void_p()
+                        child_ret = ctypes.c_void_p()
+                        rx = ctypes.c_int()
+                        ry = ctypes.c_int()
+                        wx = ctypes.c_int()
+                        wy = ctypes.c_int()
+                        mask = ctypes.c_uint()
+                        ret = _x11.XQueryPointer(
+                            _x11_display, _x11_root,
+                            ctypes.byref(root_ret), ctypes.byref(child_ret),
+                            ctypes.byref(rx), ctypes.byref(ry),
+                            ctypes.byref(wx), ctypes.byref(wy),
+                            ctypes.byref(mask),
+                        )
+                        if ret:
+                            mx, my = rx.value, ry.value
+                            if mouse_last_x != 0.0 or mouse_last_y != 0.0:
+                                dx = mx - mouse_last_x
+                                if abs(dx) > 0.5:
+                                    new_yaw = commander.command[commander.AXIS_VYAW] - dx * mouse_yaw_sensitivity
+                                    commander.command[commander.AXIS_VYAW] = float(
+                                        np.clip(new_yaw, commander.low[commander.AXIS_VYAW], commander.high[commander.AXIS_VYAW])
+                                    )
+                                    mouse_last_x = mx
+                                    mouse_last_y = my
+                                else:
+                                    commander.command[commander.AXIS_VYAW] *= mouse_yaw_decay
+                                    cx = _x11_screen_w // 2
+                                    cy = _x11_screen_h // 2
+                                    if _xtst is not None and (abs(mx - cx) > 2 or abs(my - cy) > 2):
+                                        new_x = int(mx + (cx - mx) * (1.0 - mouse_yaw_decay))
+                                        new_y = int(my + (cy - my) * (1.0 - mouse_yaw_decay))
+                                        _xtst.XTestFakeMotionEvent(_x11_display, -1, new_x, new_y, 0)
+                                        _x11.XFlush(_x11_display)
+                                        mouse_last_x = new_x
+                                        mouse_last_y = new_y
+                                    else:
+                                        mouse_last_x = mx
+                                        mouse_last_y = my
+                            else:
+                                mouse_last_x = mx
+                                mouse_last_y = my
+                    except Exception:
+                        pass
+
                 # Write the command before stepping so this step's obs follow it.
                 if commander is not None and env.state is not None:
-                    env.state.info["commands"][:, :3] = commander.command
+                    env.state.info["commands"][:, :commander.command.shape[0]] = commander.command
 
                 playback_session.advance(controls)
 
@@ -1369,6 +1520,13 @@ def _build_play_args(cfg: DictConfig, *, algo: str = "ppo") -> PlayInteractiveAr
         ),
         require_keyboard_command_obs=bool(
             OmegaConf.select(cfg, "interactive.require_keyboard_command_obs", default=True)
+        ),
+        mouse_yaw=bool(OmegaConf.select(cfg, "interactive.mouse_yaw", default=False)),
+        mouse_yaw_sensitivity=float(
+            OmegaConf.select(cfg, "interactive.mouse_yaw_sensitivity", default=0.015)
+        ),
+        mouse_yaw_decay=float(
+            OmegaConf.select(cfg, "interactive.mouse_yaw_decay", default=0.85)
         ),
         algo=algo,
     )

@@ -1,11 +1,10 @@
 <mujoco model="COD-2026-Balance crawl slope scene">
   <include file="cod_2026_balance.xml"/>
 
-  <statistic center="0 -1 0.3" extent="3.0"/>
+  <statistic center="0 0 0.3" extent="3.0"/>
 
   <visual>
-    <headlight diffuse="0.6 0.6 0.6
-    " ambient="0.1 0.1 0.1" specular="0.9 0.9 0.9"/>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
     <rgba haze="0.15 0.25 0.35 1"/>
     <global azimuth="140" elevation="-20"/>
   </visual>
@@ -15,31 +14,27 @@
     <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
       markrgb="0.8 0.8 0.8" width="300" height="300"/>
     <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
-    <material name="slope_material" rgba="0.35 0.35 0.4 1"/>
+    <material name="slope_material" rgba="0.6 0.3 0.2 1"/>
+    <material name="plateau_material" rgba="0.4 0.5 0.4 1"/>
+    <material name="ground_material" rgba="0.35 0.4 0.45 1"/>
 
-    <!--
-      The crawl-slope terrain is the holosoma terrain_slope.obj (single
-      non-convex mesh of 24 verts / 36 tris) decomposed into three convex
-      pieces, because MuJoCo's mesh-vs-primitive collisions use the per-mesh
-      convex hull. Each piece below is an 8-vertex hexahedron and is therefore
-      a true convex hull of itself, so the combined collision surface is
-      geometrically identical to the original OBJ.
-    -->
-    <mesh name="crawl_slope_slope"   file="crawl_slope/slope.obj"/>
-    <mesh name="crawl_slope_plateau" file="crawl_slope/plateau.obj"/>
-    <mesh name="crawl_slope_ground"  file="crawl_slope/ground.obj"/>
+    <mesh name="crawl_slope_slope" file="crawl_slope/slope.obj"/>
+    <!-- <mesh name="crawl_slope_plateau" file="crawl_slope/plateau.obj"/> -->
+    <mesh name="crawl_slope_ground" file="crawl_slope/ground.obj"/>
   </asset>
 
   <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
     <geom name="crawl_slope_slope" type="mesh" mesh="crawl_slope_slope"
           material="slope_material" contype="1" conaffinity="1"
-          friction="2.0 0.005 0.0001"/>
-    <geom name="crawl_slope_plateau" type="mesh" mesh="crawl_slope_plateau"
-          material="slope_material" contype="1" conaffinity="1"
-          friction="2.0 0.005 0.0001"/>
+          friction="1.0 0.005 0.0001"/>
+    <!-- <geom name="crawl_slope_plateau" type="mesh" mesh="crawl_slope_plateau"
+          material="plateau_material" contype="1" conaffinity="1"
+          friction="1.0 0.005 0.0001"/> -->
     <geom name="crawl_slope_ground" type="mesh" mesh="crawl_slope_ground"
-          material="groundplane" contype="1" conaffinity="1"
-          friction="2.0 0.005 0.0001"/>
+          material="ground_material" contype="1" conaffinity="1"
+          friction="1.0 0.005 0.0001"/>
   </worldbody>
 
   <keyframe>

@@ -243,6 +243,8 @@ _ATTACH_PREFIXED_ATTRS = {
     "mesh",
     "joint",
     "site",
+    "site1",
+    "site2",
     "geom1",
     "geom2",
     "body1",
@@ -315,7 +317,7 @@ def _ensure_generated_hfield_scene_visuals(root: ET.Element, geom_name: str) -> 
         asset,
         "./texture[@name='groundplane']",
         '<texture type="2d" name="groundplane" builtin="checker" mark="edge" '
-        'rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8" '
+        'rgb1="0.5 0.5 0.5" rgb2="0.35 0.35 0.35" markrgb="0.7 0.7 0.7" '
         'width="300" height="300"/>',
     )
     _ensure_child(
@@ -490,6 +492,7 @@ def materialize_mujoco_hfield_attached_scene(
         type=mujoco.mjtGeom.mjGEOM_HFIELD,
         hfieldname=hfield_name,
         pos=list(generated.geom_pos),
+        condim=6,
     )
 
     robot_spec = mujoco.MjSpec.from_file(str(robot_path))
@@ -509,9 +512,12 @@ def materialize_mujoco_hfield_attached_scene(
 
     physics_root = ET.fromstring(ET.tostring(root, encoding="unicode"))
     _enable_discardvisual(physics_root)
+    assets = _collect_mujoco_assets(output_path / "assets")
+    hfield_abs = str((output_path / hfield_rel).resolve())
+    assets[hfield_abs] = (output_path / hfield_rel).read_bytes()
     model = mujoco.MjSpec.from_string(
         ET.tostring(physics_root, encoding="unicode"),
-        assets=_collect_mujoco_assets(output_path / "assets"),
+        assets=assets,
     ).compile()
     if return_surface_sampler:
         return model, generated.terrain_origins, generated.surface_sampler()

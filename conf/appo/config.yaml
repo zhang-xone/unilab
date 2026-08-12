@@ -107,6 +107,8 @@ interactive:
   keyboard: false
   keyboard_step_lin: 0.1
   keyboard_step_ang: 0.2
+  mouse_yaw: false
+  mouse_yaw_sensitivity: 0.015
 
 env:
   post_step_forward_sensor: false

@@ -77,49 +77,85 @@ class PlaybackControls:
 
 @dataclass
 class KeyboardCommander:
-    """Mutable ``[vx, vy, vyaw]`` velocity command driven by keyboard nudges.
+    """Mutable ``[vx, vy, vyaw]`` or ``[vx, vy, vyaw, height]`` command driven by keyboard nudges.
 
-    Per-axis nudges stack and are clamped to the task's ``commands.vel_limit``.
+    Per-axis nudges stack and are clamped to the task's command limits.
+    Height axis (index 3) is optional; when ``height_limit`` is not provided
+    the commander stays 3-dimensional.
     """
 
     low: np.ndarray
     high: np.ndarray
     step_lin: float = 0.1
     step_ang: float = 0.2
+    step_height: float = 0.01
     command: np.ndarray = field(init=False)
 
     AXIS_VX: ClassVar[int] = 0
     AXIS_VY: ClassVar[int] = 1
     AXIS_VYAW: ClassVar[int] = 2
+    AXIS_HEIGHT: ClassVar[int] = 3
 
     def __post_init__(self) -> None:
-        self.low = np.asarray(self.low, dtype=np.float64).reshape(3)
-        self.high = np.asarray(self.high, dtype=np.float64).reshape(3)
-        self.command = np.zeros(3, dtype=np.float64)
+        self.low = np.asarray(self.low, dtype=np.float64).ravel()
+        self.high = np.asarray(self.high, dtype=np.float64).ravel()
+        ndim = self.low.shape[0]
+        self.command = np.zeros(ndim, dtype=np.float64)
+        if ndim >= 4:
+            self.command[3] = (self.low[3] + self.high[3]) / 2.0
 
     @classmethod
     def from_vel_limit(
-        cls, vel_limit: Any, *, step_lin: float = 0.1, step_ang: float = 0.2
+        cls,
+        vel_limit: Any,
+        *,
+        step_lin: float = 0.1,
+        step_ang: float = 0.2,
+        step_height: float = 0.01,
+        height_limit: Any | None = None,
     ) -> "KeyboardCommander":
         limit = np.asarray(vel_limit, dtype=np.float64)
         if limit.shape != (2, 3):
             raise ValueError(f"commands.vel_limit must have shape (2, 3), got {limit.shape}")
-        return cls(low=limit[0], high=limit[1], step_lin=float(step_lin), step_ang=float(step_ang))
+        low = list(limit[0])
+        high = list(limit[1])
+        if height_limit is not None:
+            hlim = np.asarray(height_limit, dtype=np.float64)
+            if hlim.shape == (2,):
+                low.append(float(hlim[0]))
+                high.append(float(hlim[1]))
+        return cls(
+            low=np.array(low, dtype=np.float64),
+            high=np.array(high, dtype=np.float64),
+            step_lin=float(step_lin),
+            step_ang=float(step_ang),
+            step_height=float(step_height),
+        )
+
+    @property
+    def has_height(self) -> bool:
+        return self.command.shape[0] >= 4
 
     def nudge(self, axis: int, sign: float) -> None:
-        base = self.step_lin if axis in (self.AXIS_VX, self.AXIS_VY) else self.step_ang
+        if axis == self.AXIS_HEIGHT:
+            base = self.step_height
+        elif axis in (self.AXIS_VX, self.AXIS_VY):
+            base = self.step_lin
+        else:
+            base = self.step_ang
         delta = base * (1.0 if sign >= 0 else -1.0)
         self.command[axis] = float(
             np.clip(self.command[axis] + delta, self.low[axis], self.high[axis])
         )
 
     def zero(self) -> None:
-        self.command[:] = 0.0
+        self.command[:3] = 0.0
 
     def describe(self) -> str:
-        return (
-            f"cmd vx={self.command[0]:+.2f} vy={self.command[1]:+.2f} vyaw={self.command[2]:+.2f}"
-        )
+        parts = f"cmd vx={self.command[0]:+.2f} vy={self.command[1]:+.2f} vyaw={self.command[2]:+.2f}"
+        if self.has_height:
+            parts += f" height={self.command[3]:.3f}"
+        return parts
 
 
 @dataclass(frozen=True)

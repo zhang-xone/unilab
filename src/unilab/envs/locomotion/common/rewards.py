@@ -37,7 +37,8 @@ class RewardContext:
     tracking_sigma: float = 0.25  # 兼容老配置：当 lin/ang 未设置时回退到这个值
     tracking_sigma_lin: float | None = None
     tracking_sigma_ang: float | None = None
-    base_height_target: float = 0.0
+    tracking_sigma_yaw: float | None = None
+    base_height_target: np.ndarray = field(default_factory=lambda: np.empty(0))  # per-env
     base_height: np.ndarray = field(default_factory=lambda: np.empty(0))  # pre-fetched
 
     # ── G1-only (None for quadrupeds) ───────────────────────────────

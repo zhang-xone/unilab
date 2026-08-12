@@ -11,9 +11,9 @@ from unilab.base.scene import SceneCfg
 from unilab.base.backend import create_backend
 from unilab.base.np_env import NpEnvState
 from unilab.dtype_config import get_global_dtype
-from unilab.envs.common.rotation import np_quat_mul, np_quat_apply, np_yaw_to_quat
-from unilab.dr import DomainRandomizationCapabilities, ResetPlan, IntervalRandomizationPlan
-from unilab.dr.dr_utils import build_interval_push_plan, zero_actions
+from unilab.envs.common.rotation import np_quat_mul, np_quat_apply, np_yaw_to_quat, np_yaw_from_quat, np_wrap_to_pi
+from unilab.dr import DomainRandomizationCapabilities, ResetPlan, IntervalRandomizationPlan, ResetRandomizationPayload
+from unilab.dr.dr_utils import build_interval_push_plan, validate_interval_push_support, zero_actions
 
 from unilab.envs.locomotion.common.commands import (
     Commands,
@@ -37,6 +37,7 @@ from unilab.envs.locomotion.cod_2026_balance.base import (
     Cod2026BaseCfg,
     Cod2026BaseEnv,
     compute_cod2026_motor_ctrl,
+    JOINT_LIMITS,
 )
 
 
@@ -102,18 +103,32 @@ class Cod2026RewardConfig:
         }
     )
     base_height_target: float = 0.31
-    base_height_sigma: float = 0.05      # 高度奖励的 σ：err=5cm 拿 37%
-    vertex_clearance_target: float = 0.10  # 离地间隙：0.1m 以上拿满
+    base_height_sigma: float = 0.05      # 高度奖励的 σ
+    vertex_clearance_target: float = 0.04  # 离地间隙：相对坐标 0.04m 以上拿满
     vertex_clearance_sigma: float = 0.03   # 离地间隙 σ：低3cm拿37%
     tracking_sigma: float = 0.25
     tracking_sigma_lin: float = 0.2
     tracking_sigma_ang: float = 0.1
+    tracking_sigma_yaw: float = 0.55
     tilt_limit: float = 25.0 * np.pi / 180.0
-    n_steps_delay: int = 50
+    n_steps_delay: int = 25
+    powerless_duration: float = 1.0  # reset 后无力时长（秒），期间扭矩=0/奖励=0/不终止
+    powerless_curriculum_threshold: float = 0.125  # curriculum progress 超过此值才启用无力期（2400步≈100iter）
+    powerless_probability: float = 0.2  # 每个 reset 随机启用无力期的概率
+    lift_force_max: float = 00.0  # 无力期竖直拉力最大值（N），课程 scale=0 时全量，scale→1 时归零
     # orientation_stand 的启用阈值
     stand_cmd_linvel_threshold: float = 0.1  # |cmd_vx| < 此值 → 认为应该站立
     stand_cmd_angvel_threshold: float = 0.1  # |cmd_yaw| < 此值 → 认为应该站立
     stand_tilt_threshold: float = 7.5 * np.pi / 180.0  # tilt > 此值 → 姿态已恶化
+    stand_vel_weight: float = 1.0  # 站立惩罚中水平速度项权重
+    stand_angvel_weight: float = 1.0  # 站立惩罚中角速度项权重
+    stand_linvelz_weight: float = 1.0  # 站立惩罚中垂直速度项权重
+    # 原地旋转模式：以概率 spin_in_place_prob 不跟踪 vx，以高角速度原地旋转，同时开启 stand 惩罚限制水平移动
+    spin_in_place_prob: float = 0.15  # 每个 reset/resample 进入原地旋转模式的概率
+    # ── 三区域 spawn 概率（坡/粗糙/平地，三者之和不应超过 1.0）──
+    slope_spawn_prob: float = 0.4   # 斜坡圈 spawn 概率
+    rough_spawn_prob: float = 0.15  # 远处粗糙地形 spawn 概率（hfield 边缘）
+    # 平地概率 = 1 - slope_spawn_prob - rough_spawn_prob
 
 
 @registry.envcfg("Cod2026JoystickFlat")
@@ -147,11 +162,51 @@ class Cod2026JoystickCfg(Cod2026BaseCfg):
         )
     )
     reward_config: Cod2026RewardConfig = field(default_factory=Cod2026RewardConfig)
+    # Reset 时机器人放置位置的比例：periphery_ratio 为放置在外围的比例，
+    # 1 - periphery_ratio 为放置在中心的比例。默认 0.5 表示各一半。
+    spawn_periphery_ratio: float = 0.5
 
 
 # =====================================================================
 # 领域随机化 Provider
 # =====================================================================
+
+
+def build_cod2026_backend_reset_randomization(
+    env: Any, num_reset: int
+) -> ResetRandomizationPayload | None:
+    """Build reset DR payload for Cod2026.
+
+    kp/kd are intentionally excluded -- they are sampled and applied
+    inside the owner pre-step motor control via info_updates.
+    """
+    domain_rand = getattr(env.cfg, "domain_rand", None)
+    if domain_rand is None:
+        return None
+
+    payload = ResetRandomizationPayload()
+    if getattr(domain_rand, "randomize_base_mass", False):
+        low, high = domain_rand.added_mass_range
+        payload.base_mass_delta = np.random.uniform(low, high, size=(num_reset,))
+
+    if getattr(domain_rand, "randomize_ground_friction", False):
+        base_geom_friction = env._backend.get_geom_friction()
+        ground_geom_id = env._backend.get_geom_id("floor")
+        if base_geom_friction is None:
+            raise ValueError("ground friction randomization requires a cached geom-friction table")
+        if ground_geom_id is None:
+            raise ValueError("ground friction randomization requires a ground geom id")
+        geom_friction_template = np.asarray(base_geom_friction, dtype=np.float64)
+        low, high = domain_rand.ground_friction_multiplier_range
+        geom_friction = np.broadcast_to(
+            geom_friction_template, (num_reset, *geom_friction_template.shape)
+        ).copy()
+        geom_friction[:, ground_geom_id, 0] = geom_friction_template[ground_geom_id, 0] * np.random.uniform(
+            low=low, high=high, size=(num_reset,)
+        )
+        payload.geom_friction = geom_friction
+
+    return None if payload.is_empty() else payload
 
 
 class Cod2026JoystickDomainRandomizationProvider(LocomotionDRProvider):
@@ -184,15 +239,16 @@ class Cod2026JoystickDomainRandomizationProvider(LocomotionDRProvider):
         return float(initial + (1.0 - initial) * normalized)
 
     def validate(self, env: Any, capabilities: DomainRandomizationCapabilities) -> None:
-        if capabilities is not None and getattr(env.cfg.domain_rand, "push_robots", False):
-            if not capabilities.supports_interval_push:
+        payload = build_cod2026_backend_reset_randomization(env, num_reset=1)
+        if payload is not None:
+            unsupported = capabilities.get_unsupported_reset_terms(payload.requested_terms())
+            if unsupported:
+                names = ", ".join(sorted(unsupported))
                 raise NotImplementedError(
-                    f"{env._backend.backend_type} backend does not support interval push"
+                    f"{env._backend.backend_type} backend does not support "
+                    f"Cod2026 reset randomization terms: {names}"
                 )
-            if not capabilities.supports_interval_body_force:
-                raise NotImplementedError(
-                    f"{env._backend.backend_type} backend does not support interval body force"
-                )
+        validate_interval_push_support(env, capabilities)
 
     def build_interval_randomization_plan(self, env: Any, step_counter: int):
         domain_rand = getattr(env.cfg, "domain_rand", None)
@@ -271,8 +327,49 @@ class Cod2026JoystickDomainRandomizationProvider(LocomotionDRProvider):
         qpos = np.tile(env._init_qpos, (num_reset, 1))
         qvel = np.tile(env._init_qvel, (num_reset, 1))
 
-        qpos[:, 0:2] += np.random.uniform(-0.5, 0.5, (num_reset, 2))
         qpos[:, 0:3] += env._spawn.origins_for(env_ids)
+
+        # ── 三区域 spawn：坡/粗糙/平地，概率可在 reward_config 中配置 ──
+        slope_prob = float(getattr(env._cfg.reward_config, "slope_spawn_prob", 0.4))
+        rough_prob = float(getattr(env._cfg.reward_config, "rough_spawn_prob", 0.15))
+        flat_prob = max(0.0, 1.0 - slope_prob - rough_prob)
+        total = slope_prob + rough_prob + flat_prob
+        if total > 0:
+            slope_prob /= total
+            rough_prob /= total
+            flat_prob /= total
+
+        zone_rand = np.random.random(num_reset)
+        zone_rough = zone_rand < slope_prob
+        zone_distant = (zone_rand >= slope_prob) & (zone_rand < slope_prob + rough_prob)
+        zone_flat = zone_rand >= slope_prob + rough_prob
+
+        n_flat = zone_flat.sum()
+        n_rough = zone_rough.sum()
+        n_distant = zone_distant.sum()
+
+        # Zone A: FLAT (x: +1~+5, center at +3)
+        if n_flat > 0:
+            qpos[zone_flat, 0] = 3.0 + np.random.uniform(-1.5, 1.5, size=n_flat)
+            qpos[zone_flat, 1] = np.random.uniform(-4.0, 4.0, size=n_flat)
+
+        # Zone B: ROUGH + SLOPES (center at -3,0, 中圈以内 radius≈2.3)
+        if n_rough > 0:
+            qpos[zone_rough, 0] = -3.0 + np.random.uniform(-1.0, 1.0, size=n_rough)
+            qpos[zone_rough, 1] = np.random.uniform(-2.0, 2.0, size=n_rough)
+
+        # Zone C: DISTANT ROUGH (hfield 边缘，远离 flat 和 slope 区)
+        if n_distant > 0:
+            edge_left = np.random.random(n_distant) < 0.5
+            qpos[zone_distant, 0] = np.where(edge_left,
+                np.random.uniform(-7.0, -5.0, size=n_distant),
+                np.random.uniform(5.0, 7.0, size=n_distant))
+            qpos[zone_distant, 1] = np.random.uniform(-7.0, 7.0, size=n_distant)
+
+        step_surface_z = np.array([0.4, 0.5])
+        body_stand_h = 0.31
+        choice = np.random.choice(2, size=num_reset)
+        qpos[:, 2] = step_surface_z[choice] + body_stand_h
         _facing = np.random.uniform(-np.pi , np.pi , (num_reset,))
         _backward = np.random.uniform(np.pi - np.pi , np.pi + np.pi , (num_reset,))
         _face_mask = np.random.uniform(size=(num_reset,)) < 0.5
@@ -292,8 +389,8 @@ class Cod2026JoystickDomainRandomizationProvider(LocomotionDRProvider):
         w_lin = w[:, 2]
         w_ang = w[:, 3]
 
-        pitch_base = 0.15
-        roll_base = 0.15
+        pitch_base = 0.0
+        roll_base = 0.0
         pitch = np.random.uniform(-pitch_base * w_pitch * scale, +pitch_base * w_pitch * scale, (num_reset,))
         roll = np.random.uniform(-roll_base * w_roll * scale, +roll_base * w_roll * scale, (num_reset,))
         cpt, spt = np.cos(pitch / 2), np.sin(pitch / 2)
@@ -302,39 +399,62 @@ class Cod2026JoystickDomainRandomizationProvider(LocomotionDRProvider):
         q_roll = np.stack([cpr, spr, np.zeros(num_reset), np.zeros(num_reset)], axis=1)
         qpos[:, 3:7] = np_quat_mul(np_quat_mul(q_roll, q_pitch), qpos[:, 3:7])
 
-        wheel_vel_base = 2.0
+        wheel_vel_base = 1.0
         wheel_qvel_offsets = np.array([12, 19], dtype=np.int32)
         wheel_vel = np.random.uniform(-wheel_vel_base * scale, wheel_vel_base * scale, (num_reset, len(wheel_qvel_offsets)))
         qvel[:, wheel_qvel_offsets] = qvel[:, wheel_qvel_offsets] + wheel_vel
 
-        swing_vel_base = 3.0
-        leg_qvel_offsets = np.array([6, 10, 13, 17], dtype=np.int32)
-        swing_vel = np.random.uniform(-swing_vel_base * scale, swing_vel_base * scale, (num_reset, len(leg_qvel_offsets)))
-        qvel[:, 6] = qvel[:, 6] + swing_vel[:, 0]
-        qvel[:, 10] = qvel[:, 10] + swing_vel[:, 1]
-        qvel[:, 13] = qvel[:, 13] + swing_vel[:, 2]
-        qvel[:, 17] = qvel[:, 17] + swing_vel[:, 3]
+        swing_vel_base = 2.0
+        leg_qvel_offsets = np.array([10, 17], dtype=np.int32)
+        swing_vel = np.random.uniform(-4.0, 4.0, (num_reset, len(leg_qvel_offsets)))
+        qvel[:, 10] = qvel[:, 10] + swing_vel[:, 0]
+        qvel[:, 17] = qvel[:, 17] + swing_vel[:, 1]
 
-        linvel_base = 0.5
+        linvel_base_x = 2.5
+        linvel_base_y = 1.0
         angvel_base = 0.5
-        w_lin_3 = np.broadcast_to(w_lin[:, np.newaxis], (num_reset, 3))
-        w_ang_3 = np.broadcast_to(w_ang[:, np.newaxis], (num_reset, 3))
-        qvel[:, 0:3] = np.asarray(
-            np.random.uniform(-linvel_base * w_lin_3 * scale, +linvel_base * w_lin_3 * scale, size=(num_reset, 3)),
+        qvel[:, 0] = np.asarray(
+            np.random.uniform(-linvel_base_x * w_lin * scale, +linvel_base_x * w_lin * scale, size=(num_reset,)),
             dtype=get_global_dtype(),
         )
-        qvel[:, 3:6] = np.asarray(
-            np.random.uniform(-angvel_base * w_ang_3 * scale, +angvel_base * w_ang_3 * scale, size=(num_reset, 3)),
+        qvel[:, 1] = np.asarray(
+            np.random.uniform(-linvel_base_y * w_lin * scale, +linvel_base_y * w_lin * scale, size=(num_reset,)),
+            dtype=get_global_dtype(),
+        )
+        qvel[:, 2] = 0.0
+        qvel[:, 3:5] = np.asarray(
+            np.random.uniform(-angvel_base * 0.1 * w_ang[:, np.newaxis] * scale, +angvel_base * 0.1 * w_ang[:, np.newaxis] * scale, size=(num_reset, 2)),
+            dtype=get_global_dtype(),
+        )
+        qvel[:, 5] = np.asarray(
+            np.random.uniform(-angvel_base * w_ang * scale, +angvel_base * w_ang * scale, size=(num_reset,)),
             dtype=get_global_dtype(),
         )
 
-        commands = self._sample_commands(env, num_reset)
+        commands = self._sample_commands(env, num_reset, env_ids)
 
         init_actions = np.zeros((num_reset, NUM_COD2026_ACTIONS), dtype=get_global_dtype())
+        rc = env._cfg.reward_config
+        lift_scale = np.full(num_reset, max(0.0, 1.0 - 1.0 * scale), dtype=get_global_dtype())
+
+        dr = getattr(env.cfg, "domain_rand", None)
+        kp_mult = np.ones((num_reset, 1), dtype=get_global_dtype())
+        kd_mult = np.ones((num_reset, 1), dtype=get_global_dtype())
+        if dr is not None:
+            if getattr(dr, "randomize_kp", False):
+                low, high = dr.kp_multiplier_range
+                kp_mult = np.random.uniform(low, high, size=(num_reset, 1)).astype(get_global_dtype())
+            if getattr(dr, "randomize_kd", False):
+                low, high = dr.kd_multiplier_range
+                kd_mult = np.random.uniform(low, high, size=(num_reset, 1)).astype(get_global_dtype())
+
         info_updates: dict[str, Any] = {
             "commands": commands,
             "current_actions": init_actions,
             "last_actions": init_actions.copy(),
+            "lift_force_scale": lift_scale,
+            "kp_multiplier": kp_mult,
+            "kd_multiplier": kd_mult,
         }
 
         return ResetPlan(
@@ -342,7 +462,7 @@ class Cod2026JoystickDomainRandomizationProvider(LocomotionDRProvider):
             qpos=qpos,
             qvel=qvel,
             info_updates=info_updates,
-            randomization=None,
+            randomization=build_cod2026_backend_reset_randomization(env, num_reset),
         )
 
     def _compute_reset_obs(self, env, env_ids, info_updates, linvel, gyro, gravity, dof_pos, dof_vel):
@@ -352,7 +472,7 @@ class Cod2026JoystickDomainRandomizationProvider(LocomotionDRProvider):
         lw = lw_all[env_ids]
         return env._compute_obs(info_updates, gyro, gravity, dof_pos, dof_vel, rw, lw, vx=vx)
 
-    def _sample_commands(self, env, num_reset):
+    def _sample_commands(self, env, num_reset, env_ids):
         dtype = get_global_dtype()
         vx_low = float(env._cmd_vel_range[0, 0])
         vx_high = float(env._cmd_vel_range[0, 1])
@@ -367,6 +487,15 @@ class Cod2026JoystickDomainRandomizationProvider(LocomotionDRProvider):
             dtype=dtype,
         )
         zero_small_xy_commands(commands, threshold=0.05)
+
+        # ── 原地旋转模式：以概率 spin_in_place_prob 不跟踪 vx，高角速度自转 ──
+        spin_in_place_prob = float(getattr(env.cfg.reward_config, "spin_in_place_prob", 0.0))
+        if spin_in_place_prob > 0.0:
+            spin_mask = np.random.uniform(size=(num_reset,)) < spin_in_place_prob
+            if np.any(spin_mask):
+                commands[spin_mask, 0] = 0.0
+                commands[spin_mask, 2] = np.random.uniform(1.5, 3.0, size=spin_mask.sum())
+                env._spin_mask[env_ids[spin_mask]] = True
 
         standing_prob = float(getattr(env.cfg.commands, "rel_standing_envs", 0.0))
         if standing_prob > 0.0:
@@ -407,9 +536,11 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         try:
             self._right_wheel_body_id = self._backend.get_body_ids(["Right_Wheel_link"])[0]
             self._left_wheel_body_id = self._backend.get_body_ids(["Left_Wheel_link"])[0]
+            self._base_body_id = self._backend.get_body_ids([cfg.asset.base_name])[0]
         except Exception:
             self._right_wheel_body_id = None
             self._left_wheel_body_id = None
+            self._base_body_id = 0
 
         ctrl_range = np.asarray(self._backend.get_actuator_ctrl_range(), dtype=np.float64)
         self._ctrl_lower = ctrl_range[:, 0].astype(self._np_dtype)
@@ -421,6 +552,9 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         self._motor_kp = np.broadcast_to(leg_kp_arr, (num_envs, NUM_LEG_ACTIONS)).copy()
         self._motor_kd = np.broadcast_to(leg_kd_arr, (num_envs, NUM_LEG_ACTIONS)).copy()
         self._wheel_kd = np.broadcast_to(wheel_cfg, (num_envs, NUM_WHEEL_ACTIONS)).copy()
+        self._base_motor_kp = self._motor_kp.copy()
+        self._base_motor_kd = self._motor_kd.copy()
+        self._base_wheel_kd = self._wheel_kd.copy()
         self._last_motor_ctrl = np.zeros((num_envs, NUM_COD2026_ACTIONS), dtype=self._np_dtype)
 
         self._backend.set_pre_step_control(self._pre_step_motor_control)
@@ -436,6 +570,8 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         self._last_rw_body = None   
         self._last_lw_body = None
         self._episode_steps = np.zeros(num_envs, dtype=np.int32)
+        self._lift_force_scale = np.ones(num_envs, dtype=self._np_dtype)
+        self._powerless_active = np.zeros(num_envs, dtype=bool)
         self._term_vertex = 0
         self._term_low = 0
         self._term_tilt = 0
@@ -445,28 +581,44 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         self._hit_low = 0
         self._hit_tilt = 0
 
-        self._episode_tracking_reward = np.zeros(num_envs, dtype=self._np_dtype)
         self._episode_vel_sum = np.zeros(num_envs, dtype=self._np_dtype)
         self._episode_cmd_vel_sum = np.zeros(num_envs, dtype=self._np_dtype)
+        self._episode_vel_sum_fwd = np.zeros(num_envs, dtype=self._np_dtype)
+        self._episode_cmd_vel_sum_fwd = np.zeros(num_envs, dtype=self._np_dtype)
+        self._episode_vel_sum_bwd = np.zeros(num_envs, dtype=self._np_dtype)
+        self._episode_cmd_vel_sum_bwd = np.zeros(num_envs, dtype=self._np_dtype)
         self._pbrs_lin_vel_prev = np.zeros(num_envs, dtype=self._np_dtype)
         self._pbrs_ang_vel_prev = np.zeros(num_envs, dtype=self._np_dtype)
+        self._spin_mask = np.zeros(num_envs, dtype=bool)
+        self._base_height_sigma = np.full(num_envs, float(self._cfg.reward_config.base_height_sigma), dtype=self._np_dtype)
+        self._leg_action_clip = 1.0  # curriculum 驱动，从 action_clip_initial 增长到 1.0
+        self._prev_body_vx = np.zeros(num_envs, dtype=self._np_dtype)
+        self._target_yaw = np.zeros(num_envs, dtype=self._np_dtype)
         vel_limit = self._cfg.commands.vel_limit
         self._cmd_vel_curriculum_max = float(vel_limit[1][0])
-        self._cmd_vel_range = np.array([
-            [-0.2, 0.2],
-        ], dtype=self._np_dtype)
-        self._cmd_vel_ref = float(self._cmd_vel_range[0, 1])  # 保存初始最大值 0.2
+        if getattr(self._cfg.commands, "cmd_curriculum_enabled", True):
+            init_range = self._cfg.commands.initial_vel_range
+            self._cmd_vel_range = np.array([
+                [float(init_range[0]), float(init_range[1])],
+            ], dtype=self._np_dtype)
+        else:
+            self._cmd_vel_range = np.array([
+                [float(vel_limit[0][0]), float(vel_limit[1][0])],
+            ], dtype=self._np_dtype)
+        self._cmd_vel_ref = float(vel_limit[1][0])
         self._curriculum_good_accum = 0.0
         self._curriculum_bad_accum = 0.0
-        self._curriculum_update_counter = 0
-        self._curriculum_update_interval = 50
+        self._curriculum_episode_count = 0
+        self._curriculum_eval_episode_interval = 50
         self._curriculum_consecutive_good = 0
         self._curriculum_consecutive_bad = 0
-        self._curriculum_sustain_threshold = 5
+        self._curriculum_sustain_threshold = 2
+        self._curriculum_last_eval_step = 0
+        self._curriculum_eval_step_interval = 2000
 
     @property
     def obs_groups_spec(self) -> dict[str, int]:
-        return {"obs": 33}
+        return {"obs": 35}
 
     # -----------------------------------------------------------------
     # reset：清零缓存
@@ -477,11 +629,24 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
 
         self._update_cmd_curriculum(env_ids)
 
+        # 先清零 spin_mask，_sample_commands 里会重新设置
+        self._spin_mask[env_ids] = False
+
         obs, info = super().reset(env_ids)
+
+        dr = getattr(self._cfg, "domain_rand", None)
+        if dr is not None:
+            kp_mult = np.asarray(info.get("kp_multiplier", np.ones((len(env_ids), 1))), dtype=self._np_dtype)
+            kd_mult = np.asarray(info.get("kd_multiplier", np.ones((len(env_ids), 1))), dtype=self._np_dtype)
+            self._motor_kp[env_ids] = self._base_motor_kp[env_ids] * kp_mult
+            self._motor_kd[env_ids] = self._base_motor_kd[env_ids] * kd_mult
+            self._wheel_kd[env_ids] = self._base_wheel_kd[env_ids] * kd_mult
+
         self._vertex_touch_count[env_ids] = 0
         self._body_low_count[env_ids] = 0
         self._tilt_count[env_ids] = 0
         self._last_dof_vel_for_acc[env_ids] = 0.0
+        self._last_motor_ctrl[env_ids] = 0.0
         cur_n = getattr(self, "_last_rw_body", None)
         total = cur_n.shape[0] if isinstance(cur_n, np.ndarray) else 0
         if total == 0 or total < int(env_ids.max()) + 1:
@@ -491,39 +656,66 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
             self._swing_first_step = np.ones(n, dtype=bool)
         self._swing_first_step[env_ids] = True
         self._episode_steps[env_ids] = 0
-        self._episode_tracking_reward[env_ids] = 0.0
+        self._lift_force_scale[env_ids] = info["lift_force_scale"]
+        self._powerless_active[env_ids] = np.random.random(len(env_ids)) < self._cfg.reward_config.powerless_probability
         self._episode_vel_sum[env_ids] = 0.0
         self._episode_cmd_vel_sum[env_ids] = 0.0
+        self._episode_vel_sum_fwd[env_ids] = 0.0
+        self._episode_cmd_vel_sum_fwd[env_ids] = 0.0
+        self._episode_vel_sum_bwd[env_ids] = 0.0
+        self._episode_cmd_vel_sum_bwd[env_ids] = 0.0
         self._pbrs_lin_vel_prev[env_ids] = 0.0
         self._pbrs_ang_vel_prev[env_ids] = 0.0
+        self._target_yaw[env_ids] = 0.0
+
         return obs, info
     
     def _update_cmd_curriculum(self, env_ids: np.ndarray) -> None:
         if len(env_ids) == 0:
             return
 
-        vel_sum = self._episode_vel_sum[env_ids]
-        cmd_vel_sum = self._episode_cmd_vel_sum[env_ids]
-        tracking_ratio = np.where(cmd_vel_sum > 0.01, vel_sum / cmd_vel_sum, 0.0)
+        vel_sum_fwd = self._episode_vel_sum_fwd[env_ids]
+        cmd_vel_sum_fwd = self._episode_cmd_vel_sum_fwd[env_ids]
+        vel_sum_bwd = self._episode_vel_sum_bwd[env_ids]
+        cmd_vel_sum_bwd = self._episode_cmd_vel_sum_bwd[env_ids]
 
-        good = tracking_ratio > 0.55
-        bad = ~good
+        fwd_ratio = np.where(cmd_vel_sum_fwd > 0.01, vel_sum_fwd / cmd_vel_sum_fwd, 1.0)
+        bwd_ratio = np.where(cmd_vel_sum_bwd > 0.01, vel_sum_bwd / cmd_vel_sum_bwd, 1.0)
+
+        good = (fwd_ratio > 0.7) & (bwd_ratio > 0.7)
+        bad = (fwd_ratio < 0.3) | (bwd_ratio < 0.3)
         self._curriculum_good_accum += float(np.mean(good))
         self._curriculum_bad_accum += float(np.mean(bad))
+        self._curriculum_episode_count += len(env_ids)
 
-        self._curriculum_update_counter += 1
-        if self._curriculum_update_counter < self._curriculum_update_interval:
+    def _try_curriculum_eval(self) -> None:
+        if not getattr(self._cfg.commands, "cmd_curriculum_enabled", True):
             return
-        self._curriculum_update_counter = 0
 
-        good_ratio = self._curriculum_good_accum / self._curriculum_update_interval
-        bad_ratio = self._curriculum_bad_accum / self._curriculum_update_interval
+        total_steps = getattr(self, "step_counter", 0)
+        steps_since_last = total_steps - self._curriculum_last_eval_step
+
+        if self._curriculum_episode_count < self._curriculum_eval_episode_interval and \
+           steps_since_last < self._curriculum_eval_step_interval:
+            return
+
+        if self._curriculum_episode_count == 0:
+            self._curriculum_last_eval_step = total_steps
+            return
+
+        self._curriculum_last_eval_step = total_steps
+
+        n = float(self._curriculum_episode_count)
+        good_ratio = self._curriculum_good_accum / n
+        bad_ratio = self._curriculum_bad_accum / n
         self._curriculum_good_accum = 0.0
         self._curriculum_bad_accum = 0.0
+        self._curriculum_episode_count = 0
 
         v_max = self._cmd_vel_curriculum_max
-        step = 0.05
         min_range = 0.2
+        current_range = float(self._cmd_vel_range[0, 1])
+        step = max(0.05, current_range * 0.3)
 
         if good_ratio > bad_ratio:
             self._curriculum_consecutive_good += 1
@@ -540,35 +732,66 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
             self._curriculum_consecutive_bad = 0
             self._cmd_vel_range[0, 0] = np.clip(self._cmd_vel_range[0, 0] + step, -v_max, -min_range)
             self._cmd_vel_range[0, 1] = np.clip(self._cmd_vel_range[0, 1] - step, min_range, v_max)
+
+    def _update_height_sigma(self) -> None:
+        rc = self._cfg.reward_config
+        sigma_base = float(rc.base_height_sigma)
+        sigma_min = sigma_base * 0.5
+        progress = getattr(getattr(self._dr_manager, "_provider", None), "_get_curriculum_scale", lambda _: 1.0)(self)
+        sigma = sigma_base - (sigma_base - sigma_min) * progress
+        self._base_height_sigma[:] = sigma
  
     # -----------------------------------------------------------------
     # action → PD torque
     # -----------------------------------------------------------------
 
     def apply_action(self, actions: np.ndarray, state: NpEnvState) -> np.ndarray:
-        clipped_actions = np.asarray(
-            np.clip(
-                actions,
-                -self._cfg.control_config.clip_actions,
-                self._cfg.control_config.clip_actions,
-            ),
-            dtype=self._np_dtype,
-        )
+        leg_clip = self._leg_action_clip
+        wheel_clip = self._cfg.control_config.clip_actions
+        clipped = actions.copy()
+        clipped[:, [0, 1, 3, 4]] = np.clip(actions[:, [0, 1, 3, 4]], -leg_clip, leg_clip)
+        clipped[:, [2, 5]] = np.clip(actions[:, [2, 5]], -wheel_clip, wheel_clip)
+        clipped_actions = np.asarray(clipped, dtype=self._np_dtype)
         state.info["last_actions"] = state.info.get("current_actions", np.zeros_like(clipped_actions))
         state.info["current_actions"] = clipped_actions
 
         targets = np.zeros((clipped_actions.shape[0], NUM_COD2026_ACTIONS), dtype=self._np_dtype)
         for idx in [0, 1, 3, 4]:
-            targets[:, idx] = (
-                exec_actions := clipped_actions
-            )[:, idx] * self._cfg.control_config.action_scale + self.default_angles[idx]
+            default = self.default_angles[idx]
+            lower, upper = JOINT_LIMITS[idx]
+            scale = max(upper - default, default - lower) * self._cfg.control_config.action_scale
+            targets[:, idx] = clipped_actions[:, idx] * scale + default
+            np.clip(targets[:, idx], lower, upper, out=targets[:, idx])
         for idx in [2, 5]:
             targets[:, idx] = clipped_actions[:, idx] * self._cfg.control_config.wheel_action_scale
         return targets
 
+    def _get_effective_powerless_duration(self) -> float:
+        """无力期 curriculum：复用 domain_rand 的 curriculum 进度。
+
+        curriculum progress < 0.125（2400 步 ≈ 100 iter）→ 不启用无力期
+        curriculum progress >= 0.125 → 启用完整无力时长
+        """
+        dr = getattr(self.cfg, "domain_rand", None)
+        if dr is None or not getattr(dr, "curriculum_enabled", False):
+            return self._cfg.reward_config.powerless_duration
+        step_counter = getattr(self, "step_counter", 0)
+        warmup = int(getattr(dr, "curriculum_warmup_steps", 0))
+        full = int(getattr(dr, "curriculum_full_steps", 1))
+        if full <= warmup:
+            return self._cfg.reward_config.powerless_duration
+        progress = (step_counter - warmup) / (full - warmup)
+        if progress < self._cfg.reward_config.powerless_curriculum_threshold:
+            return 0.0
+        return self._cfg.reward_config.powerless_duration
+
     def _pre_step_motor_control(self, backend: Any, policy_ctrl: np.ndarray) -> np.ndarray:
-        #policy_ctrl[:, 2] = 0.0
-        #policy_ctrl[:, 5] = 0.0
+        # 竖直拉力全程生效，课程 1/3 处归零（除以 sim_substeps，因为每 substep 调用一次）
+        lift_force = np.zeros((self._num_envs, 1, 3), dtype=self._np_dtype)
+        lift_force[:, 0, 2] = (self._cfg.reward_config.lift_force_max * self._lift_force_scale
+                               / self._cfg.sim_substeps)
+        backend.apply_body_force(np.array([self._base_body_id]), lift_force)
+
         joint_pos = self.get_dof_pos()
         joint_vel = self.get_dof_vel()
         motor_ctrl = compute_cod2026_motor_ctrl(
@@ -582,6 +805,12 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
             self._ctrl_upper,
             self._last_motor_ctrl,
         )
+
+        # 无力期内扭矩清零（逐环境判断，不影响其他环境）
+        powerless_steps = int(self._get_effective_powerless_duration() / self._cfg.ctrl_dt)
+        mask = (self._episode_steps < powerless_steps) & self._powerless_active
+        motor_ctrl[mask] = 0.0
+
         self._debug_joint_pos = joint_pos
         self._debug_joint_vel = joint_vel
         self._debug_motor_ctrl = motor_ctrl
@@ -664,6 +893,8 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         elif vx.ndim == 1:
             vx = vx.reshape(-1, 1)
 
+        yaw_error = np.asarray(info.get("yaw_error", np.zeros(n, dtype=dtype)), dtype=dtype)
+
         obs_flat = np.asarray(np.concatenate([
             gyro, upvector, dof_pos, dof_vel, last_actions, commands,
             rw_theta.reshape(-1, 1),
@@ -671,6 +902,8 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
             np.sqrt(rw_x**2 + rw_z**2).reshape(-1, 1),
             np.sqrt(lw_x**2 + lw_z**2).reshape(-1, 1),
             vx,
+            np.sin(yaw_error).reshape(-1, 1),
+            np.cos(yaw_error).reshape(-1, 1),
         ], axis=1), dtype=dtype)
 
         obs_scaled = np.clip(obs_flat, -100.0, 100.0).astype(dtype, copy=False)
@@ -697,12 +930,14 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
             "tracking_ang_vel": self._reward_tracking_ang_vel,
             "tracking_lin_vel_pbrs": self._reward_tracking_lin_vel_pbrs,
             "tracking_ang_vel_pbrs": self._reward_tracking_ang_vel_pbrs,
+            "tracking_yaw": self._reward_tracking_yaw,
             # ——高度奖励 ——————————————————
             "base_height": self._reward_base_height,
             # ——腿摆角 / 对称惩罚 ───────────────────────
             "swing_vertical": self._reward_swing_vertical,
             "swing_symmetry": self._reward_swing_symmetry,
             "swing_vel": self._reward_swing_vel,
+            "upright_swing_bonus": self._reward_upright_swing_bonus,
             # ── 轮子速度直接跟随命令 ────────────
             "wheel_target": self._reward_wheel_target,
             # ── 倒立摆侧倾稳定 ───────────────────────────────────
@@ -713,6 +948,10 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
             "wheel_slip": self._reward_wheel_slip,
             # ── 离地高度奖励 ────────────────────────────────────
             "vertex_clearance": self._reward_vertex_clearance,
+            # ── 下台阶成功离散奖励 ──────────────────────────
+            "step_down_success": self._reward_step_down_success,
+            # ── 站立惩罚：无命令时惩罚速度和摆角变化 ──────
+            "stand": self._reward_stand,
         }
 
     # ── A. 姿态 / 高度 ──────────────────────────────────────────────
@@ -733,16 +972,18 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
     def _reward_vertex_clearance(self, ctx: RewardContext) -> np.ndarray:
         """离地间隙奖励：body_box 最低点离地越高越好。
         
-        target: 0.12m (安全距离)
+        body_vertex_z 为相对坐标 (绝对世界z - 轮子世界z)，斜坡无关。
+        
+        target: 0.09m (安全距离)
         sigma: 0.03m (3cm 偏差拿 37%)
         
-        vertex_z > 0.15m → 接近满分
-        vertex_z = 0.12m → 0.5 (目标)
-        vertex_z = 0.09m → 0.18 (危险)
-        vertex_z < 0.05m → 几乎零分 (即将触地)
+        vertex_z > 0.09m → 接近满分
+        vertex_z = 0.06m → 0.5 (目标)
+        vertex_z = 0.03m → 0.18 (危险)
+        vertex_z < 0.01m → 几乎零分 (即将触地)
         """
         rc = self._cfg.reward_config
-        target = float(getattr(rc, "vertex_clearance_target", 0.15))
+        target = float(getattr(rc, "vertex_clearance_target", 0.09))
         sigma = float(getattr(rc, "vertex_clearance_sigma", 0.03))
         
         body_vertex_z = np.asarray(ctx.info["body_vertex_z"], dtype=get_global_dtype())
@@ -759,23 +1000,31 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
             return np.zeros(ctx.num_envs, dtype=get_global_dtype())
         return np.asarray(terminated, dtype=get_global_dtype())
 
+    def _reward_step_down_success(self, ctx: RewardContext) -> np.ndarray:
+        """下台阶状态奖励：越低分越高，但必须站着（倾角<15°且机身离地>8cm）。"""
+        wheel_z = np.asarray(ctx.info["wheel_world_z"], dtype=get_global_dtype())
+        tilt = np.asarray(ctx.info["tilt"], dtype=get_global_dtype())
+        body_vertex_z = np.asarray(ctx.info["body_vertex_z"], dtype=get_global_dtype())
+        upright = (tilt < 15.0) & (body_vertex_z > 0.02)
+        lvl = np.where(wheel_z > 0.35, 0.0,
+              np.where(wheel_z > 0.18, 0.33,
+              np.where(wheel_z > 0.10, 0.67, 1.0)))
+        return np.asarray(np.where(upright, lvl, 0.0), dtype=get_global_dtype())
+
     def _reward_base_height(self, ctx: RewardContext) -> np.ndarray:
         """高度目标奖励（高斯衰减）：越接近目标高度拿越多。
-
-        σ = rc.base_height_sigma（YAML 可调，默认 0.05m）。
-        err=0cm  → 1.0
-        err=5cm  → exp(-1)  ≈ 0.368
-        err=10cm → exp(-4)  ≈ 0.018
-        err=15cm → exp(-9)  ≈ 0.0001（几乎为 0，不必再加硬截止）
-
-        scale 通常为负数，所以这一项实际是「高度偏离目标越远 → 扣得越多」。
+        σ 由 curriculum 进度驱动，初期大 σ 保证梯度，后期小 σ 提高精度。
         """
         rc = self._cfg.reward_config
-        sigma = float(getattr(rc, "base_height_sigma", 0.04))
+        sigma_base = float(getattr(rc, "base_height_sigma", 0.04))
         actual_height = np.asarray(ctx.base_height, dtype=get_global_dtype())
         target_height = np.asarray(ctx.info["commands"][:, 3], dtype=get_global_dtype())
         err = actual_height - target_height
-        return np.exp(-np.square(err) / (sigma * sigma))
+        sigma_arr = np.asarray(ctx.info.get("base_height_sigma"), dtype=get_global_dtype())
+        if sigma_arr is None or sigma_arr.shape != err.shape:
+            sigma_arr = np.full_like(err, sigma_base)
+        sigma_sq = np.square(sigma_arr)
+        return np.exp(-np.square(err) / sigma_sq)
 
 
     def _soft_posture_gate(
@@ -783,6 +1032,7 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         tilt: np.ndarray,
         theta_err: np.ndarray,
         base_z: np.ndarray,
+        target_z: np.ndarray,
         *,
         low: float = 0.6,
         high: float = 1.2,
@@ -790,20 +1040,20 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         tilt_width: float = 4.0,
         swing_center: float = 18.0,
         swing_width: float = 6.0,
-        height_low_center: float = 0.26,
-        height_low_width: float = 0.014,
+        height_low_width: float | np.ndarray = 0.03,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """连续软姿态门控：三个 sigmoid 的乘积，从 low 平滑过渡到 high。
 
-        tilt / swing_err 越小、|base_z - target_z| 越小 → gate → high（姿态好）。
-        tilt / swing_err 越大、|base_z - target_z| 越大 → gate → low（姿态差）。
+        tilt / swing_err 越小、base_z >= target_z → gate → high（姿态好）。
         每个 sigmoid 在 center 处输出 0.5，width 控制过渡快慢。
-        高度维度使用相对误差 |base_z − target_z|，适配动态目标高度。
+        高度维度：只在 base_z < target_z 时启用门控（sigmoid 衰减），
+        base_z >= target_z 时 g_height = 1.0（无惩罚）。
         """
         dtype = get_global_dtype()
         g_tilt = 1.0 / (1.0 + np.exp((np.rad2deg(tilt) - tilt_center) / tilt_width))
         g_swing = 1.0 / (1.0 + np.exp((np.rad2deg(theta_err) - swing_center) / swing_width))
-        g_height = 1.0 / (1.0 + np.exp((height_low_center - base_z) / height_low_width))
+        height_err = target_z - base_z
+        g_height = np.where(height_err > 0, 1.0 / (1.0 + np.exp(height_err / height_low_width)), 1.0)
         combined = g_tilt * g_swing * g_height
         gate = np.asarray(low + (high - low) * combined, dtype=dtype)
         return gate, g_tilt, g_swing, g_height
@@ -822,23 +1072,12 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         lin_vel_error = np.square(commands[:, 0] - vx_horiz) + np.square(commands[:, 1] - vy)
         sigma_base = ctx.tracking_sigma_lin if ctx.tracking_sigma_lin is not None else ctx.tracking_sigma
         cmd_ref = self._cmd_vel_ref
-        sigma = np.maximum(sigma_base, sigma_base * np.abs(commands[:, 0]) / cmd_ref)
+        sigma = np.maximum(sigma_base * 0.20, sigma_base * np.abs(commands[:, 0]) / cmd_ref)
         raw = np.exp(-lin_vel_error / (sigma * sigma))
-
-        _tilt = ctx.info["tilt"]
-        _rw = ctx.info["swing_rw_theta"]
-        _lw = ctx.info["swing_lw_theta"]
-        _tg = ctx.info["swing_target_theta"]
-        _theta_err = np.maximum(np.abs(_rw - _tg), np.abs(_lw - _tg))
-        _base_z = ctx.info["base_z"]
-        _target_z = ctx.info["commands"][:, 3]
-
-        gating, g_tilt, g_swing, g_height = self._soft_posture_gate(_tilt, _theta_err, _base_z, low=0.6, high=1.2)
-        ctx.info["linvel_gate"] = gating
-        ctx.info["linvel_g_tilt"] = g_tilt
-        ctx.info["linvel_g_swing"] = g_swing
-        ctx.info["linvel_g_height"] = g_height
-        return np.asarray(raw * gating, dtype=get_global_dtype())
+        gating = ctx.info["tracking_gate"]
+        result = np.asarray(raw * gating, dtype=get_global_dtype())
+        ctx.info["_cache_lin_vel_phi"] = result
+        return result
 
     def _reward_tracking_ang_vel(self, ctx: RewardContext) -> np.ndarray:
         """和 common_rewards.tracking_ang_vel 一样的高斯形式，只是在末尾加姿态门控。
@@ -850,18 +1089,19 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         ang_vel_error = np.square(commands[:, 2] - ctx.gyro[:, 2])
         sigma_base = ctx.tracking_sigma_ang if ctx.tracking_sigma_ang is not None else ctx.tracking_sigma
         cmd_ref = float(self._cfg.commands.vel_limit[1][2])
-        sigma = np.maximum(sigma_base, sigma_base * np.abs(commands[:, 2]) / cmd_ref)
+        # 和 tracking_lin_vel 保持一致：sigma 固定为 sigma_base
+        sigma = np.maximum(sigma_base * 0.8/cmd_ref, sigma_base * np.abs(commands[:, 2]) / cmd_ref)
         raw = np.exp(-ang_vel_error / (sigma * sigma))
+        gating = ctx.info["tracking_gate"]
+        result = np.asarray(raw * gating, dtype=get_global_dtype())
+        ctx.info["_cache_ang_vel_phi"] = result
+        return result
 
-        _tilt = ctx.info["tilt"]
-        _rw = ctx.info["swing_rw_theta"]
-        _lw = ctx.info["swing_lw_theta"]
-        _tg = ctx.info["swing_target_theta"]
-        _theta_err = np.maximum(np.abs(_rw - _tg), np.abs(_lw - _tg))
-        _base_z = ctx.info["base_z"]
-        _target_z = ctx.info["commands"][:, 3]
-
-        gating, _, _, _ = self._soft_posture_gate(_tilt, _theta_err, _base_z, low=0.6, high=1.2)
+    def _reward_tracking_yaw(self, ctx: RewardContext) -> np.ndarray:
+        yaw_error = np.asarray(ctx.info.get("yaw_error", np.zeros(ctx.num_envs, dtype=get_global_dtype())), dtype=get_global_dtype())
+        sigma = ctx.tracking_sigma_yaw if ctx.tracking_sigma_yaw is not None else (ctx.tracking_sigma_ang if ctx.tracking_sigma_ang is not None else ctx.tracking_sigma)
+        raw = np.exp(-np.square(yaw_error) / (sigma * sigma))
+        gating = ctx.info["tracking_gate"]
         return np.asarray(raw * gating, dtype=get_global_dtype())
 
     def _reward_swing_vertical(self, ctx: RewardContext) -> np.ndarray:
@@ -877,19 +1117,26 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         raw = np.abs(err_rw) + np.abs(err_lw)
 
         _tilt = ctx.info["tilt"]
-        _rw = ctx.info["swing_rw_theta"]
-        _lw = ctx.info["swing_lw_theta"]
-        _tg = ctx.info["swing_target_theta"]
-        _theta_err = np.maximum(np.abs(_rw - _tg), np.abs(_lw - _tg))
+        _theta_err = ctx.info["theta_err"]
         _base_z = ctx.info["base_z"]
         _target_z = ctx.info["commands"][:, 3]
+        _height_sigma = np.asarray(ctx.info["base_height_sigma"], dtype=get_global_dtype()) * 0.7
         posture_gate, _, _, _ = self._soft_posture_gate(
-            _tilt, _theta_err, _base_z, low=1.5, high=0.5,
-            swing_center=14.0, swing_width=6.0,
+            _tilt, _theta_err, _base_z, _target_z, low=2.5, high=0.3,
+            swing_center=10.0, swing_width=6.0, height_low_width=_height_sigma,
         )
 
         return np.asarray(raw * posture_gate, dtype=get_global_dtype())
 
+
+    @staticmethod
+    def _wheel_reward(omega: np.ndarray, target: np.ndarray) -> np.ndarray:
+        wheel_r = 0.06
+        wheel_speed = omega * wheel_r
+        t_speed = np.where(np.abs(target) > 0.06, target, 0.0)
+        has_cmd = np.abs(t_speed) > 1e-6
+        sigma = np.where(has_cmd, np.maximum(np.abs(t_speed) * 0.5, 0.05), 0.25)
+        return np.exp(-np.square(wheel_speed - t_speed) / (2.0 * np.square(sigma)))
 
     def _reward_wheel_target(self, ctx: RewardContext) -> np.ndarray:
         """前进+转向一起考虑：左右轮分别设置目标角速度（差速驱动）。
@@ -902,8 +1149,9 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         lw_vel = ctx.info["lw_vel"]
 
         # 顶点触地时轮子目标归零，防止栽倒时轮子继续加速
+        # body_vertex_z 现在是相对坐标 (body_vertex_abs - wheel_world_z)，正确处理斜坡
         body_vertex_z = ctx.info.get("body_vertex_z", np.ones_like(cmd_vx) * 0.2)
-        vertex_touch = body_vertex_z < 0.035
+        vertex_touch = body_vertex_z < -0.025
         safe_mask = ~vertex_touch
         cmd_vx = cmd_vx * safe_mask
         cmd_ang = cmd_ang * safe_mask
@@ -913,23 +1161,8 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         target_left = cmd_vx - 0.5 * cmd_ang * L
         target_right = cmd_vx + 0.5 * cmd_ang * L
 
-        # 单个轮子的奖励：omega(rad/s)×wheel_r→线速度(m/s)，与cmd_vx同单位比较
-        # 方向对→speed(0~1.0)，方向错且|omega|>0.05→对称惩罚(-1.0量级)，无命令→omega小得分高
-        wheel_r = 0.06  # 轮半径 m，rad/s × m = m/s
-        def _wheel(omega, target):
-            wheel_speed = omega * wheel_r
-            t_speed = np.where(np.abs(target) > 0.06, target, 0.0)
-            has_cmd = np.abs(t_speed) > 1e-6
-            sigma = np.where(has_cmd, np.maximum(np.abs(t_speed) * 0.5, 0.05), 0.25)
-            raw = np.exp(-np.square(wheel_speed - t_speed) / (2.0 * np.square(sigma)))
-            return raw
-
-        combined = (_wheel(lw_vel, target_left) + _wheel(rw_vel, target_right)) * 0.5
-        _tilt = ctx.info["tilt"]
-        _theta_err = np.maximum(np.abs(ctx.info["swing_rw_theta"] - ctx.info["swing_target_theta"]),
-                                np.abs(ctx.info["swing_lw_theta"] - ctx.info["swing_target_theta"]))
-        _base_z = ctx.info["base_z"]
-        gating, _, _, _ = self._soft_posture_gate(_tilt, _theta_err, _base_z, low=0.6, high=1.2)
+        combined = (self._wheel_reward(lw_vel, target_left) + self._wheel_reward(rw_vel, target_right)) * 0.5
+        gating = ctx.info["tracking_gate"]
         return np.asarray(combined * gating, dtype=get_global_dtype())
 
     def _reward_swing_vel(self, ctx: RewardContext) -> np.ndarray:
@@ -943,16 +1176,77 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         ang_diff = np.square(rw_theta - lw_theta)
         return np.asarray(1.0 - np.exp(-ang_diff / 0.1), dtype=get_global_dtype())
 
+    def _reward_upright_swing_bonus(self, ctx: RewardContext) -> np.ndarray:
+        """离散奖励：tilt < 8° 且 swing 误差 < 8° → +1，否则 0。"""
+        tilt = np.asarray(ctx.info["tilt"], dtype=get_global_dtype())
+        err_rw = np.abs(np.asarray(ctx.info["swing_err_rw"], dtype=get_global_dtype()))
+        err_lw = np.abs(np.asarray(ctx.info["swing_err_lw"], dtype=get_global_dtype()))
+        swing_err = np.maximum(err_rw, err_lw)
+
+        tilt_th = np.deg2rad(7.5)
+        swing_th = np.deg2rad(8)
+
+        return np.asarray((tilt < tilt_th) & (swing_err < swing_th), dtype=get_global_dtype())
+
+    def _reward_stand(self, ctx: RewardContext) -> np.ndarray:
+        """站立惩罚：无速度命令时惩罚机体速度变化。
+
+        当 |cmd_vx| 和 |cmd_yaw| 都小于阈值时，认为应该站立不动，
+        此时惩罚：
+          1. 机体水平速度（vx² + vy²）
+          2. 机体角速度（roll² + pitch²）
+          3. 机体垂直速度（vz²）
+
+        用 sigmoid 软切换平滑过渡，避免硬切换导致梯度不连续：
+          gate = σ((threshold - |cmd|) / width)
+        |cmd| << threshold → gate ≈ 1（站立，全额惩罚）
+        |cmd| >> threshold → gate ≈ 0（运动，不惩罚）
+        """
+        rc = self._cfg.reward_config
+        commands = ctx.info["commands"]
+        cmd_vx = commands[:, 0]
+        cmd_yaw = commands[:, 2]
+
+        vx_threshold = float(rc.stand_cmd_linvel_threshold)
+        yaw_threshold = float(rc.stand_cmd_angvel_threshold)
+        width = 0.03
+
+        gate_vx = 1.0 / (1.0 + np.exp((np.abs(cmd_vx) - vx_threshold) / width))
+        gate_yaw = 1.0 / (1.0 + np.exp((np.abs(cmd_yaw) - yaw_threshold) / width))
+        gate = gate_vx * gate_yaw
+
+        # 原地旋转模式：强制开启 stand 门控，惩罚水平移动
+        spin_mask = np.asarray(ctx.info.get("spin_mask", np.zeros_like(cmd_vx, dtype=bool)), dtype=bool)
+        gate = np.where(spin_mask, 1.0, gate)
+
+        body_vertex_z = ctx.info.get("body_vertex_z", np.ones_like(cmd_vx) * 0.2)
+        touch_mask = body_vertex_z < -0.025
+        gate = np.where(touch_mask, 1.0, gate)
+
+        vel_sq = np.square(ctx.linvel[:, 0]) + np.square(ctx.linvel[:, 1])
+        ang_vel_xy = np.square(ctx.gyro[:, 0]) + np.square(ctx.gyro[:, 1])
+        lin_vel_z = np.square(ctx.linvel[:, 2])
+
+        w_vel = float(rc.stand_vel_weight)
+        w_angvel = float(rc.stand_angvel_weight)
+        w_linvelz = float(rc.stand_linvelz_weight)
+        raw = w_vel * vel_sq + w_angvel * ang_vel_xy + w_linvelz * lin_vel_z
+        return np.asarray(gate * raw, dtype=get_global_dtype())
+
     def _reward_tracking_lin_vel_pbrs(self, ctx: RewardContext) -> np.ndarray:
         """PBRS: 只奖励进步，不奖励已经好。reward = φ(t) - φ(t-1)。"""
-        phi = self._reward_tracking_lin_vel(ctx)
+        phi = ctx.info.get("_cache_lin_vel_phi")
+        if phi is None:
+            phi = self._reward_tracking_lin_vel(ctx)
         delta = ~ctx.info["terminated"] * (phi - self._pbrs_lin_vel_prev)
         self._pbrs_lin_vel_prev = phi.copy()
         return np.asarray(delta, dtype=get_global_dtype())
 
     def _reward_tracking_ang_vel_pbrs(self, ctx: RewardContext) -> np.ndarray:
         """PBRS: 只奖励进步，不奖励已经好。reward = φ(t) - φ(t-1)。"""
-        phi = self._reward_tracking_ang_vel(ctx)
+        phi = ctx.info.get("_cache_ang_vel_phi")
+        if phi is None:
+            phi = self._reward_tracking_ang_vel(ctx)
         delta = ~ctx.info["terminated"] * (phi - self._pbrs_ang_vel_prev)
         self._pbrs_ang_vel_prev = phi.copy()
         return np.asarray(delta, dtype=get_global_dtype())
@@ -993,7 +1287,7 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         cos_pitch = np.cos(np.arcsin(np.clip(-upvector[:, 0], -1.0, 1.0)))
         vx_horiz = vx * cos_pitch
         ctrl_dt = 0.02
-        k_accel = 2.5  # m/s² per (m/s error)：误差 0.5 m/s → 目标 1.5 m/s²
+        k_accel = 2.7  # m/s² per (m/s error)：误差 0.5 m/s → 目标 1.5 m/s²
 
         prev_vx = ctx.info.get("prev_body_vx", vx)
         prev_vx_horiz = prev_vx * cos_pitch
@@ -1001,25 +1295,23 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
 
         # ── 死区：|cmd_vx − vx| < 0.15 m/s 时直接给满分 ──
         speed_err = cmd_vx - vx_horiz
-        in_deadzone = np.abs(speed_err) < 0.15
+        in_deadzone = np.abs(speed_err) < 0.10
         target_accel = k_accel * speed_err
 
-        sigma = 1.5   # (m/s²)²：误差 ≈ 1.5 m/s² 时奖励降到 37%
+        sigma = 1.5   # (m/s²)²：err = √1.5 ≈ 1.22 m/s² 时 reward 降到 37%
         err_sq = np.square(target_accel - actual_accel)
         raw = np.where(in_deadzone, 1.0, np.exp(-err_sq / sigma))
 
         _tilt = ctx.info["tilt"]
-        _rw = ctx.info["swing_rw_theta"]
-        _lw = ctx.info["swing_lw_theta"]
-        _tg = ctx.info["swing_target_theta"]
-        _theta_err = np.maximum(np.abs(_rw - _tg), np.abs(_lw - _tg))
+        _theta_err = ctx.info["theta_err"]
         _base_z = ctx.info["base_z"]
 
         _target_z = ctx.info["commands"][:, 3]
+        _height_sigma = np.asarray(ctx.info["base_height_sigma"], dtype=get_global_dtype()) * 0.7
         gating, _, _, _ = self._soft_posture_gate(
-            _tilt, _theta_err, _base_z, low=0.6, high=1.0,
+            _tilt, _theta_err, _base_z, _target_z, low=0.6, high=1.0,
             tilt_center=8.0, tilt_width=4.0,
-            swing_center=18.0, swing_width=6.0,
+            swing_center=18.0, swing_width=6.0, height_low_width=_height_sigma,
         )
         return np.asarray(raw * gating, dtype=get_global_dtype())
 
@@ -1036,6 +1328,13 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         num_envs: int,
     ) -> np.ndarray:
         rc = self._cfg.reward_config
+        dtype = get_global_dtype()
+
+        info["base_height_sigma"] = self._base_height_sigma
+
+        powerless_steps = int(self._get_effective_powerless_duration() / self._cfg.ctrl_dt)
+        powerless_mask = (self._episode_steps < powerless_steps) & self._powerless_active
+
         ctx = RewardContext(
             info=info,
             linvel=linvel,
@@ -1047,11 +1346,12 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
             tracking_sigma=rc.tracking_sigma,
             tracking_sigma_lin=rc.tracking_sigma_lin,
             tracking_sigma_ang=rc.tracking_sigma_ang,
+            tracking_sigma_yaw=rc.tracking_sigma_yaw,
             base_height_target=info["commands"][:, 3],
-            base_height=base_pos[:, 2],
+            base_height=info.get("roll_aware_height", np.zeros(num_envs, dtype=dtype)),
             gravity=upvector,
         )
-        return run_reward_dispatch(
+        reward = run_reward_dispatch(
             scales=rc.scales,
             fns=self._reward_fns,
             ctx=ctx,
@@ -1059,6 +1359,8 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
             enable_log=True,
             ctrl_dt=float(self._cfg.ctrl_dt),
         )
+        reward[powerless_mask] = 0.0
+        return reward
 
     # -----------------------------------------------------------------
     # commands 刷新
@@ -1092,6 +1394,7 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
 
         # —— ③ 周期性重采样（resampling_time > 0 才开启）——
         resampling_time = float(getattr(self._cfg.commands, "resampling_time", 0.0))
+        resample_mask = np.zeros(n, dtype=bool)
         if resampling_time > 0.0:
             interval_steps = max(int(round(resampling_time / float(self._cfg.ctrl_dt))), 1)
             resample_mask = (steps > 0) & ((steps % interval_steps) == 0)
@@ -1110,6 +1413,16 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
                     dtype=dtype,
                 )
                 zero_small_xy_commands(new_cmd, threshold=0.05)
+                # ── 原地旋转模式（resample 时也随机触发）──
+                spin_in_place_prob = float(getattr(self._cfg.reward_config, "spin_in_place_prob", 0.0))
+                if spin_in_place_prob > 0.0:
+                    resample_indices = np.where(resample_mask)[0]
+                    self._spin_mask[resample_indices] = False
+                    spin_mask = np.random.uniform(size=(num_resample,)) < spin_in_place_prob
+                    if np.any(spin_mask):
+                        new_cmd[spin_mask, 0] = 0.0
+                        new_cmd[spin_mask, 2] = np.random.uniform(1.5, 3.0, size=spin_mask.sum())
+                        self._spin_mask[resample_indices[spin_mask]] = True
                 standing_prob = float(getattr(self._cfg.commands, "rel_standing_envs", 0.0))
                 if standing_prob > 0.0:
                     standing = np.random.uniform(size=(num_resample,)) < min(standing_prob, 1.0)
@@ -1127,6 +1440,7 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
                 commands[resample_mask] = new_cmd_4d
 
         info["commands"] = commands
+        info["_cmd_resample_mask"] = resample_mask
 
     # -----------------------------------------------------------------
     # update_state：状态计算 → 塞 info → 调用 _compute_reward → 构建 obs
@@ -1134,155 +1448,267 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
 
     def update_state(self, state: NpEnvState) -> NpEnvState:
         self._update_commands(state.info)
-        gyro = self.get_gyro()
-        upvector = self.get_upvector()
-        dof_pos = self.get_dof_pos()
-        dof_vel = self.get_dof_vel()
-        base_pos = self.get_base_pos()
-        world_linvel = self.get_world_linvel()
-        local_linvel = self.get_local_linvel()
-        rw, lw = self.get_wheel_pos()
+        self._try_curriculum_eval()
+        self._update_height_sigma()
 
-        num_envs = gyro.shape[0]
+        sensors = self._read_sensors()
         commands = state.info["commands"]
         _dt = float(self._cfg.ctrl_dt)
 
-        # body 系 sagittal 平面内的腿摆角（0=竖直向下，正=后摆，负=前摆）
-        # 用 arctan2 直接算角度，避免 3D 归一化时 y 分量（左右间距）污染方向
+        self._update_yaw(state.info, commands, _dt)
+        rw_theta, lw_theta = self._compute_swing_angles(sensors["rw_wheel"], sensors["lw_wheel"])
+        tilt, body_vertex_z, terminated = self._detect_termination(
+            sensors["upvector"], sensors["base_pos"], sensors["rw_wheel"], sensors["lw_wheel"],
+        )
+        kin = self._compute_kinematics(sensors["dof_vel"], rw_theta, lw_theta, _dt)
+
+        self._populate_info(state.info, sensors, tilt, body_vertex_z, terminated, rw_theta, lw_theta, kin)
+
+        rc = self._cfg.reward_config
+        touch_mask = (body_vertex_z < -0.025) | (sensors["base_pos"][:, 2] < 0.27) | (tilt > rc.tilt_limit)
+        if np.any(touch_mask):
+            orig_commands = state.info["commands"]
+            reward_commands = orig_commands.copy()
+            blend = np.clip(1.0 / (1.0 + np.exp(-(body_vertex_z + 0.008) / 0.02)), 0.0, 1.0)
+            actual_vx = sensors["world_linvel"][:, 0]
+            target_vx = reward_commands[touch_mask, 0]
+            reward_commands[touch_mask, 0] = blend[touch_mask] * target_vx + (1.0 - blend[touch_mask]) * actual_vx[touch_mask]
+            state.info["commands"] = reward_commands
+            reward = self._compute_reward(
+                state.info, sensors["world_linvel"], sensors["gyro"], sensors["upvector"],
+                sensors["dof_pos"], sensors["dof_vel"], sensors["base_pos"], self._num_envs,
+            )
+            state.info["commands"] = orig_commands
+        else:
+            reward = self._compute_reward(
+                state.info, sensors["world_linvel"], sensors["gyro"], sensors["upvector"],
+                sensors["dof_pos"], sensors["dof_vel"], sensors["base_pos"], self._num_envs,
+            )
+
+        self._prev_body_vx = sensors["local_linvel"][:, 0].copy()
+        self._accumulate_curriculum_stats(state.info, sensors["local_linvel"], commands)
+
+        self._debug_print(state.info, reward, commands, sensors, tilt, body_vertex_z)
+
+        obs = self._compute_obs(
+            state.info, sensors["gyro"], sensors["upvector"], sensors["dof_pos"],
+            sensors["dof_vel"], sensors["rw_wheel"], sensors["lw_wheel"],
+            vx=sensors["local_linvel"][:, 0],
+        )
+        return state.replace(obs=obs, reward=reward, terminated=terminated)
+
+    # -----------------------------------------------------------------
+    # update_state 子步骤
+    # -----------------------------------------------------------------
+
+    def _read_sensors(self) -> dict[str, np.ndarray]:
+        return {
+            "gyro": self.get_gyro(),
+            "upvector": self.get_upvector(),
+            "dof_pos": self.get_dof_pos(),
+            "dof_vel": self.get_dof_vel(),
+            "base_pos": self.get_base_pos(),
+            "world_linvel": self.get_world_linvel(),
+            "local_linvel": self.get_local_linvel(),
+            "rw_wheel": self.get_wheel_pos()[0],
+            "lw_wheel": self.get_wheel_pos()[1],
+        }
+
+    def _update_yaw(self, info: dict, commands: np.ndarray, _dt: float) -> None:
+        base_quat = self.get_base_quat()
+        base_yaw = np_yaw_from_quat(base_quat)
+
+        first_step_mask = self._episode_steps == 0
+        if np.any(first_step_mask):
+            self._target_yaw[first_step_mask] = base_yaw[first_step_mask]
+
+        resample_mask = info.get("_cmd_resample_mask", np.zeros_like(first_step_mask, dtype=bool))
+        if np.any(resample_mask):
+            self._target_yaw[resample_mask] = base_yaw[resample_mask]
+
+        self._target_yaw += commands[:, 2] * _dt
+        self._target_yaw = np_wrap_to_pi(self._target_yaw)
+
+        yaw_error = np_wrap_to_pi(self._target_yaw - base_yaw)
+        info["yaw_error"] = yaw_error
+
+    @staticmethod
+    def _compute_swing_angles(rw: np.ndarray, lw: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         rw_theta = -np.arctan2(rw[:, 0], -rw[:, 2])
         lw_theta = -np.arctan2(lw[:, 0], -lw[:, 2])
+        return rw_theta, lw_theta
 
-        # 延迟终止（用 box 几何精确计算最低点 z，不依赖 touch 传感器）
+    def _detect_termination(self, upvector: np.ndarray, base_pos: np.ndarray,
+                         rw_wheel: np.ndarray, lw_wheel: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         rc = self._cfg.reward_config
         tilt = np.arccos(np.clip(upvector[:, 2], 0.0, 1.0))
-        body_vertex_z = self._get_body_min_z(base_pos, upvector)
-        vertex_touch = body_vertex_z < 0.035  # box 最低点低于 35cm → 认为主体已碰地
-        body_too_low = base_pos[:, 2] < 0.25
-        body_tilt_too_high = tilt > rc.tilt_limit
+        body_vertex_z_abs = self._get_body_min_z(base_pos, upvector)
+        wheel_world_z = base_pos[:, 2] + (rw_wheel[:, 2] + lw_wheel[:, 2]) * 0.5
+        body_vertex_z = body_vertex_z_abs - wheel_world_z
+
+        powerless_steps = int(self._get_effective_powerless_duration() / self._cfg.ctrl_dt)
+        powerless_mask = (self._episode_steps < powerless_steps) & self._powerless_active
+
+        vertex_touch = (body_vertex_z < -0.025) & ~powerless_mask
+        body_too_low = (base_pos[:, 2] < 0.25) & ~powerless_mask
+        body_tilt_too_high = (tilt > rc.tilt_limit) & ~powerless_mask
+
         self._vertex_touch_count = np.where(vertex_touch, self._vertex_touch_count + 1, 0)
         self._body_low_count = np.where(body_too_low, self._body_low_count + 1, 0)
         self._tilt_count = np.where(body_tilt_too_high, self._tilt_count + 1, 0)
+
         terminated = (
             (self._vertex_touch_count >= rc.n_steps_delay)
             | (self._body_low_count >= rc.n_steps_delay)
             | (self._tilt_count >= rc.n_steps_delay)
-        )
+        ) & ~powerless_mask
+
+        n_envs = self._num_envs
         self._episode_steps += 1
-        self._total_steps += num_envs
-        self._term_window_steps += num_envs
+        self._total_steps += n_envs
+        self._term_window_steps += n_envs
         self._hit_vertex += int(np.sum(vertex_touch))
         self._hit_low += int(np.sum(body_too_low))
         self._hit_tilt += int(np.sum(body_tilt_too_high))
-        if np.any(terminated):
-            self._term_vertex += int(np.sum(
-                (self._vertex_touch_count >= rc.n_steps_delay) & terminated
-            ))
-            self._term_low += int(np.sum(
-                (self._body_low_count >= rc.n_steps_delay) & terminated
-            ))
-            self._term_tilt += int(np.sum(
-                (self._tilt_count >= rc.n_steps_delay) & terminated
-            ))
-        if self._term_window_steps >= 200 * num_envs:
-            self._term_vertex = 0
-            self._term_low = 0
-            self._term_tilt = 0
-            self._term_window_steps = 0
-            self._hit_vertex = 0
-            self._hit_low = 0
-            self._hit_tilt = 0
 
-        # torques / qacc
+        if np.any(terminated):
+            self._term_vertex += int(np.sum((self._vertex_touch_count >= rc.n_steps_delay) & terminated))
+            self._term_low += int(np.sum((self._body_low_count >= rc.n_steps_delay) & terminated))
+            self._term_tilt += int(np.sum((self._tilt_count >= rc.n_steps_delay) & terminated))
+
+        if self._term_window_steps >= 200 * n_envs:
+            self._term_vertex = self._term_low = self._term_tilt = 0
+            self._term_window_steps = 0
+            self._hit_vertex = self._hit_low = self._hit_tilt = 0
+
+        return tilt, body_vertex_z, terminated
+
+    def _compute_kinematics(self, dof_vel: np.ndarray, rw_theta: np.ndarray, lw_theta: np.ndarray, _dt: float) -> dict[str, np.ndarray]:
         torques = self._last_motor_ctrl.copy()
         qacc = (dof_vel - self._last_dof_vel_for_acc) / _dt
         self._last_dof_vel_for_acc[:] = dof_vel
 
-        # 摆角速度：body 系 theta 的时间变化率（真正的物理意义）
-        # per-env 计算：first_step 的 env 速度设为 0，其他 env 正常差分
         d_rw = rw_theta - self._last_rw_body
         d_lw = lw_theta - self._last_lw_body
-        swing_vel_sq = d_rw ** 2 + d_lw ** 2
-        swing_vel_sq = swing_vel_sq / (_dt ** 2)
+        swing_vel_sq = (d_rw ** 2 + d_lw ** 2) / (_dt ** 2)
+
         if hasattr(self, "_swing_first_step"):
             swing_vel_sq = np.where(self._swing_first_step, 0.0, swing_vel_sq)
-            self._swing_first_step = np.zeros(num_envs, dtype=bool)
+            self._swing_first_step = np.zeros_like(self._swing_first_step, dtype=bool)
+
         self._last_rw_body = rw_theta.copy()
         self._last_lw_body = lw_theta.copy()
-        wheel_vel_avg = np.mean(dof_vel[:, WHEEL_JOINT_INDICES], axis=1)
-        rw_vel = dof_vel[:, WHEEL_JOINT_INDICES[0]]
-        lw_vel = dof_vel[:, WHEEL_JOINT_INDICES[1]]
 
-        # 摆角目标固定为默认角度，不跟速度误差走——
-        # 方向/加速的信号由 body_accel_tracking 和 wheel_target 提供，
-        # swing_vertical 只负责「腿别偏离默认位置太远」。
-        swing_target_theta = np.full_like(rw_theta, np.deg2rad(3.0))
-        swing_err_rw = rw_theta - swing_target_theta
-        swing_err_lw = lw_theta - swing_target_theta
-
-        # 把奖励函数需要的量塞进 info
-        state.info.update({
-            "tilt": tilt,
-            "base_z": base_pos[:, 2],
-            "base_pos_x": base_pos[:, 0],
+        return {
             "torques": torques,
             "qacc": qacc,
+            "swing_vel_sq": swing_vel_sq,
+            "wheel_vel_avg": np.mean(dof_vel[:, WHEEL_JOINT_INDICES], axis=1),
+            "rw_vel": dof_vel[:, WHEEL_JOINT_INDICES[0]],
+            "lw_vel": dof_vel[:, WHEEL_JOINT_INDICES[1]],
+        }
+
+    def _compute_roll_aware_height(self, rw_wheel: np.ndarray, lw_wheel: np.ndarray,
+                                    upvector: np.ndarray) -> np.ndarray:
+        """基于横滚角的几何高度计算。
+
+        只用更低一侧腿做计算，公式：
+          h = L1 * cos(φ) + D/2 * |sin(φ)|
+
+        其中：
+          φ = roll = arcsin(upvector[:, 1])  — 横滚角
+          L1 = -lower_wheel_z + wheel_r       — 更低侧腿长（髋→足底，沿重力竖直）
+          D/2 = 0.17                          — 髋间距半宽（髋 |y|≈0.17）
+
+        几何推导：
+          更低端点竖直高度 = z_foot + L1*cos(φ)   （腿矢量向重力竖直轴投影）
+          中点 B 竖直高度 = 低点竖直高度 + D/2*|sin(φ)|
+          令 z_foot = 0（足底贴地），得 h = L1*cos(φ) + D/2*|sin(φ)|
+        """
+        wheel_r = 0.06
+        D_half = 0.17
+
+        roll = np.arcsin(np.clip(upvector[:, 1], -1.0, 1.0))
+        right_lower = roll < 0.0
+
+        lower_wheel_z = np.where(right_lower, rw_wheel[:, 2], lw_wheel[:, 2])
+        L1 = -lower_wheel_z + wheel_r
+
+        h = L1 * np.cos(roll) + D_half * np.abs(np.sin(roll))
+        return np.asarray(h, dtype=get_global_dtype())
+
+    def _populate_info(self, info: dict, sensors: dict, tilt: np.ndarray, body_vertex_z: np.ndarray,
+                       terminated: np.ndarray, rw_theta: np.ndarray, lw_theta: np.ndarray,
+                       kin: dict) -> None:
+        swing_target_theta = np.full_like(rw_theta, np.deg2rad(3.0))
+        roll_aware_height = self._compute_roll_aware_height(
+            sensors["rw_wheel"], sensors["lw_wheel"], sensors["upvector"],
+        )
+        wheel_world_z = sensors["base_pos"][:, 2] + (
+            sensors["rw_wheel"][:, 2] + sensors["lw_wheel"][:, 2]
+        ) * 0.5
+        theta_err = np.maximum(np.abs(rw_theta - swing_target_theta), np.abs(lw_theta - swing_target_theta))
+        height_sigma = self._base_height_sigma * 0.7
+        tracking_gate, g_tilt, g_swing, g_height = self._soft_posture_gate(
+            tilt, theta_err, sensors["base_pos"][:, 2], info["commands"][:, 3],
+            low=0.6, high=1.2, height_low_width=height_sigma,
+        )
+        info.update({
+            "tilt": tilt,
+            "base_z": sensors["base_pos"][:, 2],
+            "theta_err": theta_err,
+            "torques": kin["torques"],
+            "qacc": kin["qacc"],
             "swing_rw_theta": rw_theta,
             "swing_lw_theta": lw_theta,
-            "swing_vel_sq": swing_vel_sq,
-            "wheel_vel_avg": wheel_vel_avg,
-            "rw_vel": rw_vel,
-            "lw_vel": lw_vel,
+            "swing_vel_sq": kin["swing_vel_sq"],
+            "wheel_vel_avg": kin["wheel_vel_avg"],
+            "rw_vel": kin["rw_vel"],
+            "lw_vel": kin["lw_vel"],
             "swing_target_theta": swing_target_theta,
-            "swing_err_rw": swing_err_rw,
-            "swing_err_lw": swing_err_lw,
+            "swing_err_rw": rw_theta - swing_target_theta,
+            "swing_err_lw": lw_theta - swing_target_theta,
             "terminated": terminated,
             "body_vertex_z": body_vertex_z,
-            "prev_body_vx": local_linvel[:, 0],
-            "body_vx": local_linvel[:, 0],
-            "body_vy": local_linvel[:, 1],
-            "upvector": upvector,
+            "prev_body_vx": self._prev_body_vx,
+            "body_vx": sensors["local_linvel"][:, 0],
+            "body_vy": sensors["local_linvel"][:, 1],
+            "upvector": sensors["upvector"],
+            "roll_aware_height": roll_aware_height,
+            "wheel_world_z": wheel_world_z,
+            "tracking_gate": tracking_gate,
+            "g_tilt": g_tilt,
+            "g_swing": g_swing,
+            "g_height": g_height,
+            "spin_mask": self._spin_mask,
         })
 
-        # 计算 reward（dispatch）—— ctx.linvel 传世界坐标系速度
-        reward = self._compute_reward(
-            state.info, world_linvel, gyro, upvector, dof_pos, dof_vel, base_pos, num_envs
-        )
-
-        tracking_lin_per_env = np.asarray(
-            self._reward_tracking_lin_vel(
-                RewardContext(
-                    info=state.info, linvel=world_linvel, gyro=gyro,
-                    dof_pos=dof_pos, dof_vel=dof_vel, num_envs=num_envs,
-                    default_angles=np.asarray(self.default_angles, dtype=self._np_dtype),
-                    tracking_sigma=rc.tracking_sigma,
-                    tracking_sigma_lin=rc.tracking_sigma_lin,
-                    tracking_sigma_ang=rc.tracking_sigma_ang,
-                    base_height_target=state.info["commands"][:, 3],
-                    base_height=base_pos[:, 2],
-                    gravity=upvector,
-                )
-            ), dtype=self._np_dtype,
-        )
-        self._episode_tracking_reward += tracking_lin_per_env
+    def _accumulate_curriculum_stats(self, info: dict, local_linvel: np.ndarray, commands: np.ndarray) -> None:
         self._episode_vel_sum += np.abs(local_linvel[:, 0])
         self._episode_cmd_vel_sum += np.abs(commands[:, 0])
 
-        self._debug_print(
-            state.info, reward, commands, gyro, upvector, dof_vel,
-            base_pos, world_linvel, local_linvel, tilt, body_vertex_z, torques, num_envs,
-        )
-
-        # 构建 obs
-        obs = self._compute_obs(state.info, gyro, upvector, dof_pos, dof_vel, rw, lw, vx=local_linvel[:, 0])
-        return state.replace(obs=obs, reward=reward, terminated=terminated)
-
+        fwd = commands[:, 0] > 0.05
+        bwd = commands[:, 0] < -0.05
+        self._episode_vel_sum_fwd += np.where(fwd & (local_linvel[:, 0] > 0), np.abs(local_linvel[:, 0]), 0.0)
+        self._episode_cmd_vel_sum_fwd += np.where(fwd, np.abs(commands[:, 0]), 0.0)
+        self._episode_vel_sum_bwd += np.where(bwd & (local_linvel[:, 0] < 0), np.abs(local_linvel[:, 0]), 0.0)
+        self._episode_cmd_vel_sum_bwd += np.where(bwd, np.abs(commands[:, 0]), 0.0)
+    
+    #打印调试信息，每200步打印一次
     def _debug_print(
-        self, info, reward, commands, gyro, upvector, dof_vel,
-        base_pos, world_linvel, local_linvel, tilt, body_vertex_z, torques, num_envs,
+        self, info, reward, commands, sensors, tilt, body_vertex_z,
     ):
-        steps = info.get("steps", np.zeros((num_envs,), dtype=np.uint32))
+        steps = info.get("steps", np.zeros((self._num_envs,), dtype=np.uint32))
         if int(steps[0]) % 200 != 0:
             return
+
+        gyro = sensors["gyro"]
+        upvector = sensors["upvector"]
+        dof_vel = sensors["dof_vel"]
+        base_pos = sensors["base_pos"]
+        world_linvel = sensors["world_linvel"]
+        local_linvel = sensors["local_linvel"]
+        torques = info.get("torques", np.zeros_like(dof_vel))
 
         tilt_raw = float(np.mean(np.sqrt(np.sum(np.square(upvector[:, :2]), axis=1))))
         base_z_mean = float(np.mean(base_pos[:, 2]))
@@ -1304,6 +1730,8 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
 
         fwd_mask = commands[:, 0] > 0.02
         bwd_mask = commands[:, 0] < -0.02
+        left_mask = commands[:, 2] > 0.05
+        right_mask = commands[:, 2] < -0.05
 
         swing_target = info["swing_target_theta"]
         swing_err_rw = info["swing_err_rw"]
@@ -1315,6 +1743,7 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         all_rw_v = float(np.mean(info["rw_vel"])) * 0.06
         all_lw_v = float(np.mean(info["lw_vel"])) * 0.06
         all_cmd_ang = float(np.mean(commands[:, 2]))
+        all_w_signed = float(np.mean(gyro[:, 2]))
         L = 0.4155
         all_tg_rw = all_cmd_vx + 0.5 * all_cmd_ang * L
         all_tg_lw = all_cmd_vx - 0.5 * all_cmd_ang * L
@@ -1323,6 +1752,20 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         all_lw_err = float(np.rad2deg(np.mean(np.abs(swing_err_lw))))
         all_rw_theta = float(np.rad2deg(np.mean(info["swing_rw_theta"])))
         all_lw_theta = float(np.rad2deg(np.mean(info["swing_lw_theta"])))
+
+        if left_mask.sum() > 0:
+            left_cmd_ang = float(np.mean(commands[left_mask, 2]))
+            left_w = float(np.mean(gyro[left_mask, 2]))
+        else:
+            left_cmd_ang = 0.0
+            left_w = 0.0
+
+        if right_mask.sum() > 0:
+            right_cmd_ang = float(np.mean(commands[right_mask, 2]))
+            right_w = float(np.mean(gyro[right_mask, 2]))
+        else:
+            right_cmd_ang = 0.0
+            right_w = 0.0
 
         if fwd_mask.sum() > 0:
             fwd_cmd_vx = float(np.mean(commands[fwd_mask, 0]))
@@ -1390,8 +1833,11 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         pitch_abs  = float(np.mean(np.abs(pitch_all)))
         roll_abs   = float(np.mean(np.abs(roll_all)))
         h_tg_mean = float(np.mean(commands[:, 3]))
+        h_mean = float(np.mean(info.get("roll_aware_height", np.zeros_like(base_z_mean))))
+        yaw_err = info.get("yaw_error", np.zeros(self._num_envs, dtype=self._np_dtype))
+        yaw_err_deg = float(np.rad2deg(np.mean(np.abs(yaw_err))))
         print(
-            f"  base_z=" f"{base_z_mean:.3f}" f"(tg:{h_tg_mean:.3f})"
+            f"  base_z=" f"{base_z_mean:.3f}" f"(h:{h_mean:.3f}/tg:{h_tg_mean:.3f})"
             f"  tilt=" f"{np.rad2deg(tilt.mean()):+.1f}°"
             f"  pitch=" f"{pitch_mean:+.1f}°" f"(|{pitch_abs:.1f}°)"
             f"  roll=" f"{roll_mean:+.1f}°" f"(|{roll_abs:.1f}°)"
@@ -1405,9 +1851,12 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         policy_lw_tg_v = policy_lw_raw * self._cfg.control_config.wheel_action_scale * 0.06
 
         print(f"  vz="f"{vz_raw:.3f}"
-              f"  w="f"{angv_raw:.3f}"f"(tg:{angv_cmd_abs:.3f})"
+              f"  w="f"{angv_raw:.3f}"f"(tg:{angv_cmd_abs:.3f})"f"(signed:{all_w_signed:+.3f})"
               f"  wheel_avg="f"{wheel_v_raw * 0.06:+.3f}m/s"
               f"  rw_v="f"{rw_vel_raw * 0.06:+.3f}m/s"f"  lw_v="f"{lw_vel_raw * 0.06:+.3f}m/s")
+        print(f"  |yaw_err|="f"{yaw_err_deg:+.1f}°")
+        print(f"  左转← cmd_wz={left_cmd_ang:+.2f}  wz={left_w:+.3f}"
+              f"  |  右转→ cmd_wz={right_cmd_ang:+.2f}  wz={right_w:+.3f}")
         print(f"  policy_rw="f"{policy_rw_raw:+.3f}"f"(→v="f"{policy_rw_tg_v:+.3f}m/s)"
               f"  policy_lw="f"{policy_lw_raw:+.3f}"f"(→v="f"{policy_lw_tg_v:+.3f}m/s)")
         print(f"  rw_θ="f"{rw_theta_deg:+.1f}°"
@@ -1450,39 +1899,34 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
               f"  lw_θ="f"{bwd_lw_theta:+.1f}°"
               f"  err_rw="f"{bwd_rw_err:+.1f}°"
               f"  err_lw="f"{bwd_lw_err:+.1f}°")
-        cur_theta_avg = (info["swing_rw_theta"] + info["swing_lw_theta"]) * 0.5
-        if not hasattr(self, "_last_theta_for_debug"):
-            self._last_theta_for_debug = cur_theta_avg.copy()
-        dtheta_dt = (cur_theta_avg - self._last_theta_for_debug) / 0.02
-        self._last_theta_for_debug = cur_theta_avg.copy()
 
-        speed_err = commands[:, 0] - local_linvel[:, 0]
-        avg_swing_err = cur_theta_avg - info["swing_target_theta"]
-        swing_range_gate = np.clip(1.0 - np.abs(avg_swing_err) / np.deg2rad(10.0), 0.0, 1.0)
-        direction_ok = (speed_err * dtheta_dt) > 0
-        dir_ratio = float(np.mean(direction_ok.astype(np.float32)))
-        target_dtheta = np.clip(np.abs(speed_err) * np.deg2rad(30.0), np.deg2rad(5.0), np.deg2rad(60.0))
-        amount = np.clip(np.abs(dtheta_dt) / target_dtheta, 0.0, 1.0)
+        posture_gate = float(np.mean(info.get("tracking_gate", np.ones(self._num_envs))))
+        g_tilt_val = float(np.mean(info.get("g_tilt", np.ones(self._num_envs))))
+        g_swing_val = float(np.mean(info.get("g_swing", np.ones(self._num_envs))))
+        g_height_val = float(np.mean(info.get("g_height", np.ones(self._num_envs))))
 
-        posture_gate = float(np.mean(info.get("linvel_gate", np.ones(num_envs))))
-        g_tilt_val = float(np.mean(info.get("linvel_g_tilt", np.ones(num_envs))))
-        g_swing_val = float(np.mean(info.get("linvel_g_swing", np.ones(num_envs))))
-        g_height_val = float(np.mean(info.get("linvel_g_height", np.ones(num_envs))))
-        in_deadzone = np.abs(speed_err) < 0.15
-        
-        core = np.where(in_deadzone, 0.0, np.where(direction_ok, amount * swing_range_gate, 0.0))
-        score = core * posture_gate
+        sigma_arr_debug = info.get("base_height_sigma")
+        if sigma_arr_debug is not None:
+            sigma_mean = float(np.mean(sigma_arr_debug))
+            sigma_min_val = float(np.min(sigma_arr_debug))
+            sigma_max_val = float(np.max(sigma_arr_debug))
+            height_err_mean = float(np.mean(np.abs(info.get("roll_aware_height", np.zeros_like(commands[:, 3])) - commands[:, 3])))
+            height_err_max = float(np.max(np.abs(info.get("roll_aware_height", np.zeros_like(commands[:, 3])) - commands[:, 3])))
+            print(f"  height_sigma mean={sigma_mean:.4f} min={sigma_min_val:.4f} max={sigma_max_val:.4f}  err_mean={height_err_mean:.4f} err_max={height_err_max:.4f}")
 
         print(
-            f"  dθ/dt="f"{float(np.rad2deg(np.mean(dtheta_dt))):+.1f}°/s"
-            f"  tg_dθ="f"{float(np.rad2deg(np.mean(target_dtheta))):+.1f}°/s"
-            f"  amount="f"{float(np.mean(amount)):.3f}"
-            f"  dir_ok="f"{dir_ratio:.2f}"
-            f"  swing_gate="f"{float(np.mean(swing_range_gate)):.3f}"
             f"  posture_gate="f"{posture_gate:.3f}"f"(g_t={g_tilt_val:.3f}/g_s={g_swing_val:.3f}/g_h={g_height_val:.3f})"
-            f"  |swing_err|="f"{float(np.rad2deg(np.mean(np.abs(avg_swing_err)))):+.1f}°"
-            f"  score="f"{float(np.mean(score)):.4f}"
         )
+
+        wheel_z = info.get("wheel_world_z")
+        if wheel_z is not None:
+            wheel_z_mean = float(np.mean(wheel_z))
+            wheel_z_min = float(np.min(wheel_z))
+            lvl3 = int(np.sum(wheel_z > 0.35))
+            lvl2 = int(np.sum((wheel_z > 0.18) & (wheel_z <= 0.35)))
+            lvl1 = int(np.sum((wheel_z > 0.10) & (wheel_z <= 0.18)))
+            lvl0 = int(np.sum(wheel_z <= 0.10))
+            print(f"  wheel_z mean={wheel_z_mean:.3f} min={wheel_z_min:.3f}  L3={lvl3} L2={lvl2} L1={lvl1} L0={lvl0}")
 
         print(f"  torque="f"{float(np.sqrt(np.mean(np.sum(np.square(torques), axis=1)))):+.3f}"
               f"  rw_torque="f"{float(np.mean(np.abs(torques[:, 2]))):+.3f}N·m"
@@ -1493,6 +1937,8 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
               f"  hit(touch/low/tilt)/1000step="f"{self._hit_vertex / max(self._term_window_steps, 1) * 1000:.0f}/{self._hit_low / max(self._term_window_steps, 1) * 1000:.0f}/{self._hit_tilt / max(self._term_window_steps, 1) * 1000:.0f}"
               f"  body_vertex_z mean={float(np.mean(body_vertex_z)):.4f}m  min={float(np.min(body_vertex_z)):.4f}m  max={float(np.max(body_vertex_z)):.4f}m  base_z_mean={float(np.mean(base_pos[:, 2])):.4f}m"
               f"  total_steps="f"{self._total_steps}"
+              f"  step_counter="f"{getattr(self, 'step_counter', 0)}"
+              f"  curriculum_scale="f"{float(getattr(getattr(self._dr_manager, '_provider', None), '_get_curriculum_scale', lambda _: 1.0)(self)):.2f}"
               f"  cmd_vx_range=["f"{float(self._cmd_vel_range[0, 0]):+.2f}, "f"{float(self._cmd_vel_range[0, 1]):+.2f}]"
               )
 

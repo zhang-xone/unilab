@@ -1,0 +1,18 @@
+# @package _global_
+# Balance Joystick Flat — Motrix variant for sim2sim eval.
+# Inherits the mujoco training config in full and only switches the rendering
+# backend so checkpoints trained on mujoco can be replayed via motrix's native
+# renderer. Training on motrix is not the intended path.
+defaults:
+  - /task/balance_joystick_flat/mujoco
+  - _self_
+
+training:
+  sim_backend: motrix
+
+env:
+  sim_dt: 0.002
+  motrix_max_iterations: 10
+  domain_rand:
+    randomize_kp: false
+    randomize_kd: false

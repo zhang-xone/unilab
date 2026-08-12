@@ -23,6 +23,7 @@ class Sensor:
 class ControlConfigBase:
     action_scale: float = 0.25
     simulate_action_latency: bool = False
+    action_latency_steps: float = 1.0  # 支持小数步延迟：0.1=5ms, 1.0=50ms
 
 
 @dataclass

@@ -117,6 +117,9 @@ interactive:
   keyboard: false
   keyboard_step_lin: 0.1
   keyboard_step_ang: 0.2
+  mouse_yaw: false
+  mouse_yaw_sensitivity: 0.015
+  mouse_yaw_decay: 0.85
 
 viser:
   port: 8080

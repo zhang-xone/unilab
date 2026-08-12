@@ -25,6 +25,20 @@ class DomainRandConfig:
     randomize_dof_armature: bool = False
     dof_armature_multiplier_range: list[float] = field(default_factory=lambda: [0.8, 1.2])
 
+    randomize_kp: bool = False
+    randomize_kd: bool = False
+    kp_multiplier_range: list[float] = field(default_factory=lambda: [0.8, 1.2])
+    kd_multiplier_range: list[float] = field(default_factory=lambda: [0.8, 1.2])
+
+    randomize_motor_torque: bool = False
+    torque_scale_range: list[float] = field(default_factory=lambda: [0.7, 1.0])
+
+    actuator_noise: bool = False
+    actuator_noise_std_range: list[float] = field(default_factory=lambda: [0.0, 1.0])
+
+    randomize_inertia: bool = False
+    inertia_multiplier_range: list[float] = field(default_factory=lambda: [0.8, 1.2])
+
     push_robots: bool = False
     # 静态 push_interval（旧配置方式，保持兼容）
     push_interval: int = 750  # step

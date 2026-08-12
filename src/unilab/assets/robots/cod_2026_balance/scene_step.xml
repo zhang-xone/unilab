@@ -1,0 +1,57 @@
+<mujoco model="COD-2026-Balance step scene">
+  <include file="cod_2026_balance.xml"/>
+
+  <statistic center="0 0 0.3" extent="3.0"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="120" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
+      markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+    <material name="step1_mat" rgba="0.6 0.55 0.5 1.0"/>
+    <material name="step2_mat" rgba="0.5 0.5 0.55 1.0"/>
+    <material name="step3_mat" rgba="0.45 0.45 0.6 1.0"/>
+    <material name="threshold_mat" rgba="0.75 0.65 0.35 1.0"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 3.0" dir="0 0 -1" directional="true"/>
+    <!-- 地面 -->
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    <!-- 第一级：0.05m × 5.0m × 5.0m -->
+    <geom name="step1" type="box" size="2.5 2.5 0.025" pos="0 0 0.025" material="step1_mat" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    <!-- 第二级：0.15m × 3.5m × 3.5m（叠在 step1 上，总高 0.20m） -->
+    <geom name="step2" type="box" size="1.75 1.75 0.075" pos="0 0 0.125" material="step2_mat" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    <!-- 第三级：0.22m × 2.0m × 2.0m（叠在 step2 上，总高 0.42m） -->
+    <geom name="step3" type="box" size="1.0 1.0 0.11" pos="0 0 0.31" material="step3_mat" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+
+    <!-- 门槛：第一级 step1 四周（3cm 高 × 2cm 宽），表面 z=0.05 -->
+    <geom name="threshold1_front"  type="box" size="2.5 0.01 0.015" pos="0 2.5 0.065" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="threshold1_back"   type="box" size="2.5 0.01 0.015" pos="0 -2.5 0.065" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="threshold1_left"   type="box" size="0.01 2.5 0.015" pos="-2.5 0 0.065" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="threshold1_right"  type="box" size="0.01 2.5 0.015" pos="2.5 0 0.065" material="threshold_mat" contype="1" conaffinity="1"/>
+
+    <!-- 门槛：第二级 step2 四周（3cm 高 × 2cm 宽），表面 z=0.20 -->
+    <geom name="threshold2_front"  type="box" size="1.75 0.01 0.015" pos="0 1.75 0.215" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="threshold2_back"   type="box" size="1.75 0.01 0.015" pos="0 -1.75 0.215" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="threshold2_left"   type="box" size="0.01 1.75 0.015" pos="-1.75 0 0.215" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="threshold2_right"  type="box" size="0.01 1.75 0.015" pos="1.75 0 0.215" material="threshold_mat" contype="1" conaffinity="1"/>
+
+    <!-- 门槛：第三级 step3 四周（3cm 高 × 2cm 宽），表面 z=0.42 -->
+    <geom name="threshold3_front"  type="box" size="1.0 0.01 0.015" pos="0 1.0 0.435" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="threshold3_back"   type="box" size="1.0 0.01 0.015" pos="0 -1.0 0.435" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="threshold3_left"   type="box" size="0.01 1.0 0.015" pos="-1.0 0 0.435" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="threshold3_right"  type="box" size="0.01 1.0 0.015" pos="1.0 0 0.435" material="threshold_mat" contype="1" conaffinity="1"/>
+  </worldbody>
+
+  <keyframe>
+    <key name="home" qpos="0.000000 0.000000 0.720000 1.000000 0.000000 0.000000 0.000000 0.239130 -0.520634 0.284200 -0.486861 -0.519644 0.563946 -0.874393 0.162861 -0.480007 0.287870 -0.455611 -0.497974 0.507563 0.334914" />
+  </keyframe>
+
+</mujoco>

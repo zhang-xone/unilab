@@ -17,6 +17,9 @@ class Commands:
             [1.0, 0.4, 0.8],  # [vx_max, vy_max, vyaw_max]
         ]
     )
+    initial_vel_range: list[float] = field(default_factory=lambda: [-0.2, 0.2])
+    initial_yaw_range: float = 1.0
+    cmd_curriculum_enabled: bool = True
     height_limit: list[float] = field(default_factory=lambda: [0.28, 0.32])
     resampling_time: float = 0.0
     heading_command: bool = False

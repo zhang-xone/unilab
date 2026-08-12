@@ -28,6 +28,17 @@ DEFAULT_ANGLES: np.ndarray = np.array(
 )
 JOINT_ZERO_OFFSET = DEFAULT_ANGLES.copy()
 
+# 各关节的物理限位（来自 XML range 属性），顺序同 DEFAULT_ANGLES
+JOINT_LIMITS: np.ndarray = np.array(
+    [[-1.57, 2.40],     # Right_front_joint
+     [-1.57, 1.57],     # Right_rear_joint
+     [-np.inf, np.inf], # Right_Wheel_joint
+     [-1.57, 2.40],     # Left_front_joint
+     [-1.57, 1.57],     # Left_rear_joint
+     [-np.inf, np.inf]],# Left_Wheel_joint
+    dtype=np.float64,
+)
+
 # 被驱动关节的 sensor name（与 XML 中 actuator 顺序一致）
 JOINT_SENSOR_PREFIXES: tuple[str, ...] = (
     "Right_front_joint",
@@ -67,6 +78,7 @@ class ControlConfig(PdControlConfig):
     wheel_action_scale: float = 5.0  # action∈[-1,1] → target_vel ∈ [-5,5] rad/s（静止时 torque≈±7.5）
 
     clip_actions: float = 1.0       # 对齐 action_space 的 [-1, 1]
+    action_clip_initial: float = 0.3  # curriculum 初期 action clip 范围，线性增长到 1.0
  
 
 

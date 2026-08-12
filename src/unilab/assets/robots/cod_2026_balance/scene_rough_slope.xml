@@ -1,0 +1,61 @@
+<mujoco model="COD-2026-Balance dual-zone scene">
+  <include file="cod_2026_balance.xml"/>
+
+  <statistic center="0 0 0.2" extent="1.0"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="120" elevation="-20"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <!-- rough terrain (covers entire 14x14 area) -->
+    <texture type="2d" name="groundplane" file="/home/xxx/ubuntu_software/unilab/UniLab/src/unilab/assets/robots/g1/textures/rocky.png"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance=".2"/>
+    <hfield name="hfield" file="/home/xxx/ubuntu_software/unilab/UniLab/src/unilab/assets/robots/g1/hfields/hfield.png" size="14 14 .03 0.06"/>
+    <!-- flat zone material -->
+    <material name="flat_material" rgba="0.3 0.5 0.3 1"/>
+    <!-- slopes -->
+    <material name="pyramid_material" rgba="0.6 0.3 0.2 1"/>
+    <mesh name="pyramid_slope_03" file="crawl_slope/pyramid_slope_03.obj"/>
+    <mesh name="pyramid_slope_05" file="crawl_slope/pyramid_slope_05.obj"/>
+    <mesh name="pyramid_slope_07" file="crawl_slope/pyramid_slope_07.obj"/>
+    <mesh name="pyramid_slope_09" file="crawl_slope/pyramid_slope_09.obj"/>
+    <mesh name="pyramid_slope_11" file="crawl_slope/pyramid_slope_11.obj"/>
+    <mesh name="pyramid_slope_13" file="crawl_slope/pyramid_slope_13.obj"/>
+    <mesh name="pyramid_slope_15" file="crawl_slope/pyramid_slope_15.obj"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+    <!-- ====== rough hfield (14x14, base for both zones) ====== -->
+    <geom name="floor" type="hfield" hfield="hfield" material="groundplane" contype="1" conaffinity="1" priority="1" friction="1.0"/>
+
+    <!-- ====== ZONE A: FLAT (x: +1 to +5, y: -5 to +5) ====== -->
+    <geom name="flat_main" type="box" size="2.0 5.0 0.03" material="flat_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="3.0 0.0 0.03"/>
+
+    <!-- ====== ZONE B: ROUGH + SLOPES (center at -3,0) ====== -->
+    <!-- 内圈 4 个（3°~7°）-->
+    <geom name="pyramid_1" type="mesh" mesh="pyramid_slope_03" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="-1.85 0.0 0.0"/>
+    <geom name="pyramid_2" type="mesh" mesh="pyramid_slope_05" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="-4.15 0.0 0.0"/>
+    <geom name="pyramid_3" type="mesh" mesh="pyramid_slope_07" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="-3.0 1.35 0.0"/>
+    <geom name="pyramid_4" type="mesh" mesh="pyramid_slope_03" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="-3.0 -1.35 0.0"/>
+    <!-- 中圈 4 个（7°~11°）-->
+    <geom name="pyramid_5" type="mesh" mesh="pyramid_slope_07" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="-1.37 1.63 0.0"/>
+    <geom name="pyramid_6" type="mesh" mesh="pyramid_slope_09" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="-4.63 1.63 0.0"/>
+    <geom name="pyramid_7" type="mesh" mesh="pyramid_slope_11" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="-1.37 -1.63 0.0"/>
+    <geom name="pyramid_8" type="mesh" mesh="pyramid_slope_09" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="-4.63 -1.63 0.0"/>
+    <!-- 外圈 4 个（11°~15°）-->
+    <geom name="pyramid_9" type="mesh" mesh="pyramid_slope_11" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="-0.1 0.0 0.0"/>
+    <geom name="pyramid_10" type="mesh" mesh="pyramid_slope_13" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="-6.1 0.0 0.0"/>
+    <geom name="pyramid_11" type="mesh" mesh="pyramid_slope_15" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="-3.0 3.1 0.0"/>
+    <geom name="pyramid_12" type="mesh" mesh="pyramid_slope_13" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="-3.0 -3.1 0.0"/>
+  </worldbody>
+
+  <keyframe>
+    <key name="home" qpos="0.000000 0.000000 0.50000 1.000000 0.000000 0.000000 0.000000 0.239130 -0.520634 0.284200 -0.486861 -0.519644 0.563946 -0.874393 0.162861 -0.480007 0.287870 -0.455611 -0.497974 0.507563 0.334914" />
+  </keyframe>
+
+</mujoco>

@@ -47,6 +47,8 @@ class BaseSpawnManager:
 class TerrainCurriculumCfg:
     enabled: bool = False
     """If True, levels start at 0 and evolve via promote/demote."""
+    init_level: int = 0
+    """Initial terrain level. 恢复训练时设为上次 mean_level，避免从 0 重新爬。"""
     promote_frac: float = 0.5
     """Walked distance > promote_frac * cell_size promotes one level."""
     demote_frac: float = 0.25
@@ -99,7 +101,8 @@ class TerrainSpawnManager(BaseSpawnManager):
 
         self.type_cols = self._rng.integers(0, num_cols, size=num_envs).astype(np.int32)
         if cfg.enabled:
-            self.levels = np.zeros(num_envs, dtype=np.int32)
+            init_lvl = max(0, min(int(cfg.init_level), num_rows - 1))
+            self.levels = np.full(num_envs, init_lvl, dtype=np.int32)
         else:
             self.levels = self._rng.integers(0, num_rows, size=num_envs).astype(np.int32)
 
