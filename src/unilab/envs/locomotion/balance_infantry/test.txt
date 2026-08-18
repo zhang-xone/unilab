@@ -1,0 +1,31 @@
+PYTHONUNBUFFERED=1 uv run train \
+  --algo ppo \
+  --task balance_infantry_joystick_flat \
+  --sim mujoco \
+  algo.max_iterations=1500 \
+  algo.num_steps_per_env=24 \
+  training.no_play=false \
+  training.logger=tensorboard
+
+PYTHONUNBUFFERED=1 uv run train \
+  --algo ppo \
+  --task balance_infantry_joystick_flat \
+  --sim mujoco \
+  algo.load_run="2026-08-12_17-55-25_mujoco" \
+  algo.checkpoint=-1 \
+  algo.max_iterations=1500 \
+  algo.num_steps_per_env=24 \
+  training.no_play=true
+
+uv run scripts/play_interactive.py \
+  --algo ppo \
+  --task balance_infantry_joystick_flat \
+  --sim mujoco \
+  algo.load_run=-1 \
+  algo.checkpoint=-1 \
+  interactive.action_mode=policy \
+  interactive.keyboard=true \
+  +interactive.require_keyboard_command_obs=false \
+  algo.num_envs=1 \
+  training.device=null \
+  interactive.speed=1.0

@@ -8,4 +8,5 @@ __unilab_registry_modules__ = (
     "unilab.envs.locomotion.go2_arm",
     "unilab.envs.locomotion.cod_2026_balance",
     "unilab.envs.locomotion.balance",
+    "unilab.envs.locomotion.balance_infantry",
 )

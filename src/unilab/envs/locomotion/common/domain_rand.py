@@ -13,6 +13,8 @@ class DomainRandConfig:
 
     random_com: bool = False
     com_offset_x: list[float] = field(default_factory=lambda: [-0.05, 0.05])
+    com_offset_y: list[float] = field(default_factory=lambda: [-0.05, 0.05])
+    com_offset_z: list[float] = field(default_factory=lambda: [-0.05, 0.05])
 
     randomize_gravity: bool = False
     gravity_range: list[list[float]] = field(

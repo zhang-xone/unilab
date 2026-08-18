@@ -825,7 +825,7 @@ class BalanceJoystickEnv(BalanceBaseEnv):
 
     @property
     def obs_groups_spec(self) -> dict[str, int]:
-        return {"obs": 37, "critic": 37 + self._height_scan_dim}
+        return {"obs": 36, "critic": 36 + self._height_scan_dim}
 
     # -----------------------------------------------------------------
     # reset：清零缓存
@@ -1244,7 +1244,7 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         noisy_dof_vel = self._obs_noise(dof_vel, noise_cfg.scale_joint_vel)
 
         obs_flat = np.asarray(np.concatenate([
-            noisy_gyro, pitch, roll, noisy_dof_pos, noisy_dof_vel, last_actions, commands,
+            noisy_gyro, pitch, roll, noisy_dof_pos, noisy_dof_vel, last_actions, commands[:, [0, 2, 3, 4]],
             rw_theta.reshape(-1, 1),
             lw_theta.reshape(-1, 1),
             np.sqrt(rw_x**2 + rw_z**2).reshape(-1, 1),
@@ -1259,7 +1259,7 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         obs_scaled = np.clip(obs_flat, -100.0, 100.0).astype(dtype, copy=False)
 
         critic_flat = np.asarray(np.concatenate([
-            gyro, pitch, roll, dof_pos, dof_vel, last_actions, commands,
+            gyro, pitch, roll, dof_pos, dof_vel, last_actions, commands[:, [0, 2, 3, 4]],
             rw_theta.reshape(-1, 1),
             lw_theta.reshape(-1, 1),
             np.sqrt(rw_x**2 + rw_z**2).reshape(-1, 1),
@@ -1298,6 +1298,8 @@ class BalanceJoystickEnv(BalanceBaseEnv):
             # ——速度追踪奖励 ——————————————————
             "tracking_lin_vel": self._reward_tracking_lin_vel,
             "tracking_ang_vel": self._reward_tracking_ang_vel,
+            "tracking_lin_vel_precise": self._reward_tracking_lin_vel_precise,
+            "tracking_ang_vel_precise": self._reward_tracking_ang_vel_precise,
             "tracking_lin_vel_pbrs": self._reward_tracking_lin_vel_pbrs,
             "tracking_ang_vel_pbrs": self._reward_tracking_ang_vel_pbrs,
             "tracking_yaw": self._reward_tracking_yaw,
@@ -1494,6 +1496,33 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         result = np.asarray(raw * gating, dtype=get_global_dtype())
         ctx.info["_cache_ang_vel_phi"] = result
         return result
+
+    def _reward_tracking_lin_vel_precise(self, ctx: RewardContext) -> np.ndarray:
+        """精度加强版线速度追踪：σ = 原 σ / 3，对微小误差更敏感。"""
+        commands = ctx.info["commands"]
+        vx = ctx.info["body_vx"]
+        vy = ctx.info["body_vy"]
+        gravity_body = ctx.info["gravity_body"]
+        cos_pitch = np.cos(np.arcsin(np.clip(gravity_body[:, 0], -1.0, 1.0)))
+        vx_horiz = vx * cos_pitch
+        lin_vel_error = np.square(commands[:, 0] - vx_horiz) + np.square(commands[:, 1] - vy)
+        sigma_base = (ctx.tracking_sigma_lin if ctx.tracking_sigma_lin is not None else ctx.tracking_sigma) / 3.0
+        cmd_ref = self._cmd_vel_ref
+        sigma = np.maximum(sigma_base * 0.20, sigma_base * np.abs(commands[:, 0]) / cmd_ref)
+        raw = np.exp(-lin_vel_error / (sigma * sigma))
+        gating = ctx.info["tracking_gate"]
+        return np.asarray(raw * gating, dtype=get_global_dtype())
+
+    def _reward_tracking_ang_vel_precise(self, ctx: RewardContext) -> np.ndarray:
+        """精度加强版角速度追踪：σ = 原 σ / 3，对微小误差更敏感。"""
+        commands = ctx.info["commands"]
+        ang_vel_error = np.square(commands[:, 2] - ctx.gyro[:, 2])
+        sigma_base = (ctx.tracking_sigma_ang if ctx.tracking_sigma_ang is not None else ctx.tracking_sigma) / 3.0
+        cmd_ref = float(self._cfg.commands.vel_limit[1][2])
+        sigma = np.maximum(sigma_base * 0.8 / cmd_ref, sigma_base * np.abs(commands[:, 2]) / cmd_ref)
+        raw = np.exp(-ang_vel_error / (sigma * sigma))
+        gating = ctx.info["tracking_gate"]
+        return np.asarray(raw * gating, dtype=get_global_dtype())
 
     def _reward_tracking_yaw(self, ctx: RewardContext) -> np.ndarray:
         yaw_error = np.asarray(ctx.info.get("yaw_error", np.zeros(ctx.num_envs, dtype=get_global_dtype())), dtype=get_global_dtype())

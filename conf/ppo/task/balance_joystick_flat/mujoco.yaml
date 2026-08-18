@@ -35,27 +35,27 @@ algo:
 
 env:
   scene:
-    #model_file: src/unilab/assets/robots/balance/scene_rmuc.xml
+    model_file: src/unilab/assets/robots/balance/scene_rmuc.xml
     #model_file: src/unilab/assets/robots/balance/scene_crawl_slope.xml
     #model_file: src/unilab/assets/robots/balance/balance.xml
-    terrain:
-      generator:
-        curriculum: true
-        size: [8.0, 8.0]
-        num_rows: 6
-        num_cols: 6
-        border_width: 1.0
-        add_lights: true
-        horizontal_scale: 0.1
-      hfield_name: terrain_hfield
-      geom_name: floor
-    #terrain: ~
-    #fragment_files: []
+    #terrain:
+    #  generator:
+    #    curriculum: true
+    #    size: [8.0, 8.0]
+    #    num_rows: 6
+    #    num_cols: 6
+    #    border_width: 1.0
+    #    add_lights: true
+    #    horizontal_scale: 0.1
+    #  hfield_name: terrain_hfield
+    #  geom_name: floor
+    terrain: ~
+    fragment_files: []
   terrain_scan:
     enabled: false
   terrain_curriculum:
     enabled: true
-    init_level: 0                  # 恢复训练时设为上次 mean_level（如 3），避免从 0 重新爬
+    init_level: 1                  # 恢复训练时设为上次 mean_level（如 3），避免从 0 重新爬
     promote_frac: 0.3
     demote_frac: 0.1
     spawn_height_margin: 0.05
@@ -135,6 +135,8 @@ reward:
     tracking_lin_vel: 1.6
     tracking_ang_vel: 0.5
     tracking_yaw: 1.0
+    tracking_lin_vel_precise: 0.5
+    tracking_ang_vel_precise: 0.5
     tracking_lin_vel_pbrs: 5
     tracking_ang_vel_pbrs: 5
     body_accel_tracking: 0.1

@@ -1,0 +1,988 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<robot
+  name="串联底盘总装.SLDASM">
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="-0.003275 0.004369 0.161592"
+        rpy="0 0 0" />
+      <mass value="14.963" />
+      <inertia
+        ixx="0.341206"
+        ixy="-0.001149"
+        ixz="-0.008540"
+        iyy="0.389167"
+        iyz="0.008120"
+        izz="0.352902" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.752941176470588 0.752941176470588 0.752941176470588 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="left_front_link">
+    <inertial>
+      <origin
+        xyz="0.023691 -0.016724 -0.009272"
+        rpy="0 0 0" />
+      <mass
+        value="0.23108" />
+      <inertia
+        ixx="0.000168515"
+        ixy="0.000066440"
+    	ixz="-0.000120284"
+    	iyy="0.000466866"
+    	iyz="-0.000026002"
+    	izz="0.000428796" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/left_front_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.86667 0.9098 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/left_front_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="left_front_joint"
+    type="revolute">
+    <origin
+      xyz="1.2536 -1.154 1.2009"
+      rpy="0 0 -1.5708" />
+    <parent
+      link="base_link" />
+    <child
+      link="left_front_link" />
+    <axis
+      xyz="0 -1 0" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="left_front_child1_link">
+    <inertial>
+      <origin
+        xyz="-0.029583401313602 -0.00392898480309811 -0.0271316359860962"
+        rpy="0 0 0" />
+      <mass
+        value="0.0481143758826108" />
+      <inertia
+          </joint>
+  <link
+    name="left_front_child1_link">
+    <inertial>
+      <origin
+        xyz="-0.029583401313602 -0.00392898480309811 -0.0271316359860962"
+        rpy="0 0 0" />
+      <mass
+        value="0.0481143758826108" />
+      <inertia
+        ixx="0.000042981"
+    	ixy="0.000001524"
+    	ixz="0.000043229"
+    	iyy="0.000089320"
+    	iyz="0.000001398"
+    	izz="0.000050470" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/left_front_child1_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/left_front_child1_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="left_front_child1_joint"
+    type="revolute">
+    <origin
+      xyz="0.093123 -0.012 -0.036444"
+      rpy="0 0 0" />
+    <parent
+      link="left_front_link" />
+    <child
+      link="left_front_child1_link" />
+    <axis
+      xyz="0 -1 0" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="left_front_child2_link">
+    <inertial>
+      <origin
+        xyz="-0.0664410136394971 -0.0053601011647233 0.0552440152903617"
+        rpy="0 0 0" />
+      <mass
+        value="0.160442393372078" />
+      <inertia
+        ixx="0.000337897"
+    	ixy="-0.000009524"
+    	ixz="-0.000356722"
+    	iyy="0.000747795"
+    	iyz="0.000008028"
+    	izz="0.000420509" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/left_front_child2_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.776470588235294 0.756862745098039 0.737254901960784 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/left_front_child2_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="left_front_child2_joint"
+    type="revolute">
+    <origin
+      xyz="-0.087068 0.012 -0.079852"
+      rpy="0 0 0" />
+    <parent
+      link="left_front_child1_link" />
+    <child
+      link="left_front_child2_link" />
+    <axis
+      xyz="0 -1 0" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="left_front_child3_link">
+    <inertial>
+      <origin
+        xyz="-0.0338827277768247 -0.00309508303229533 -0.0175137351797825"
+        rpy="0 0 0" />
+      <mass
+        value="0.0520570396916548" />
+      <inertia
+        ixx="0.000024278"
+    	ixy="0.000003360"
+    	ixz="0.000037702"
+    	iyy="0.000095748"
+    	iyz="0.000001737"
+    	izz="0.000077731" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/left_front_child3_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/left_front_child3_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="left_front_child3_joint"
+    type="revolute">
+    <origin
+      xyz="-0.12795 -0.014 0.12045"
+      rpy="0 0 0" />
+    <parent
+      link="left_front_child2_link" />
+    <child
+      link="left_front_child3_link" />
+    <axis
+      xyz="0 -1 0" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="left_front_site2"/>
+  <joint
+    name="left_front_site2_joint"
+    type="fixed">
+    <origin
+      xyz="-0.110057399650853 0.00949999998187279 -0.0590302182674645"
+      rpy="0 0 0" />
+    <parent
+      link="left_front_child3_link" />
+    <child
+      link="left_front_site2" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="left_front_site1"/>
+  <joint
+    name="left_front_site1_joint"
+    type="fixed">
+    <origin
+      xyz="-0.0948895541816921 -0.00499999999999035 0.0703777813461022"
+      rpy="0 0 0" />
+    <parent
+      link="left_front_child2_link" />
+    <child
+      link="left_front_site1" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="left_rear_link">
+    <inertial>
+      <origin
+        xyz="-0.083963 -0.0084609 -0.042134"
+        rpy="0 0 0" />
+      <mass
+        value="0.42383" />
+      <inertia
+        ixx="0.000700873"
+    	ixy="-0.000050106"
+    	ixz="0.001032183"
+    	iyy="0.002960943"
+    	iyz="-0.000021714"
+    	izz="0.002294598" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/left_rear_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/left_rear_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="left_rear_joint"
+    type="revolute">
+    <origin
+      xyz="1.2396 -1.154 1.2009"
+      rpy="0 0 -1.5708" />
+    <parent
+      link="base_link" />
+    <child
+      link="left_rear_link" />
+    <axis
+      xyz="0 -1 0" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="left_rear_child1_link">
+    <inertial>
+      <origin
+        xyz="0.104502 -0.003953 -0.075056"
+        rpy="0 0 0" />
+      <mass
+        value="0.587" />
+      <inertia
+        ixx="0.002628689"
+    	ixy="0.000224727"
+    	ixz="-0.003042528"
+    	iyy="0.006572705"
+    	iyz="-0.000172965"
+    	izz="0.004072287" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/left_rear_child1_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.929411764705882 0.929411764705882 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/left_rear_child1_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="left_rear_child1_joint"
+    type="revolute">
+    <origin
+      xyz="-0.19099 0.017 -0.098723"
+      rpy="0 0 0" />
+    <parent
+      link="left_rear_link" />
+    <child
+      link="left_rear_child1_link" />
+    <axis
+      xyz="0 -1 0" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="left_wheel_link">
+    <inertial>
+      <origin
+        xyz="-0.022405 0.01855 -0.036197"
+        rpy="0 0 0" />
+      <mass
+        value="0.23575" />
+      <inertia
+        ixx="0.000370164"
+    	ixy="0.000000000"
+    	ixz="0.000000000"
+    	iyy="0.000719335"
+    	iyz="0.000000000"
+    	izz="0.000370164" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/left_wheel_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.86667 0.9098 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/left_wheel_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="left_wheel_joint"
+    type="revolute">
+    <origin
+      xyz="0.22642 0 -0.11511"
+      rpy="0 0 0" />
+    <parent
+      link="left_rear_child1_link" />
+    <child
+      link="left_wheel_link" />
+    <axis
+      xyz="0 -1 0" />
+    <limit
+      lower="-3.1416"
+      upper="3.1416"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="left_rear_site2"/>
+  <joint
+    name="left_rear_site2_joint"
+    type="fixed">
+    <origin
+      xyz="-0.0409584787595736 -0.00749999999999584 0.0438452165886043"
+      rpy="0 0 0" />
+    <parent
+      link="left_rear_child1_link" />
+    <child
+      link="left_rear_site2" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="left_rear_site1"/>
+  <joint
+    name="left_rear_site1_joint"
+    type="fixed">
+    <origin
+      xyz="-0.0888343948889414 0.00900000000056345 -0.0459178678921175"
+      rpy="0 0 0" />
+    <parent
+      link="left_rear_link" />
+    <child
+      link="left_rear_site1" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="right_front_link">
+    <inertial>
+      <origin
+        xyz="0.023478 0.016549 -0.0091883"
+        rpy="0 0 0" />
+      <mass
+        value="0.22508" />
+      <inertia
+        ixx="0.000161850"
+    	ixy="-0.000060446"
+    	ixz="-0.000114181"
+    	iyy="0.000445842"
+    	iyz="0.000023656"
+    	izz="0.000408925" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/right_front_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.86667 0.9098 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/right_front_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="right_front_joint"
+    type="revolute">
+    <origin
+      xyz="0.87957 -1.154 1.2009"
+      rpy="0 0 -1.5708" />
+    <parent
+      link="base_link" />
+    <child
+      link="right_front_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="right_front_child1_link">
+    <inertial>
+      <origin
+        xyz="-0.0551449626102209 0.00278921100230378 -0.0505747534664165"
+        rpy="0 0 0" />
+      <mass
+        value="0.0445886797622929" />
+      <inertia
+        ixx="0.000039277"
+    	ixy="0.000003147"
+    	ixz="0.000040175"
+    	iyy="0.000083696"
+    	iyz="0.000002886"
+    	izz="0.000046238" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/right_front_child1_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/right_front_child1_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="right_front_child1_joint"
+    type="revolute">
+    <origin
+      xyz="0.093123 0.012 -0.036444"
+      rpy="0 0 0" />
+    <parent
+      link="right_front_link" />
+    <child
+      link="right_front_child1_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="right_front_child2_link">
+    <inertial>
+      <origin
+        xyz="-0.0734216083232024 0.00649999920544952 0.0609593460296582"
+        rpy="0 0 0" />
+      <mass
+        value="0.13702039858358" />
+      <inertia
+        ixx="0.000263129"
+    	ixy="0.000000000"
+    	ixz="-0.000273593"
+    	iyy="0.000578193"
+    	iyz="0.000000000"
+    	izz="0.000318576" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/right_front_child2_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/right_front_child2_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="right_front_child2_joint"
+    type="revolute">
+    <origin
+      xyz="-0.087068 -0.0135 -0.079852"
+      rpy="0 0 0" />
+    <parent
+      link="right_front_child1_link" />
+    <child
+      link="right_front_child2_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="right_front_child3_link">
+    <inertial>
+      <origin
+        xyz="-0.0508625504629695 0.00497342042881743 -0.0262904832863697"
+        rpy="0 0 0" />
+      <mass
+        value="0.0346784514954245" />
+      <inertia
+        ixx="0.000013339"
+    	ixy="-0.000000047"
+    	ixz="0.000022222"
+    	iyy="0.000057596"
+    	iyz="-0.000000024"
+    	izz="0.000044844" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/right_front_child3_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/right_front_child3_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="right_front_child3_joint"
+    type="revolute">
+    <origin
+      xyz="-0.12795 0.0155 0.12045"
+      rpy="0 0 0" />
+    <parent
+      link="right_front_child2_link" />
+    <child
+      link="right_front_child3_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="right_front_site2"/>
+  <joint
+    name="right_front_site2_joint"
+    type="fixed">
+    <origin
+      xyz="-0.110057399787824 -0.0094999999813038 -0.0590302178599611"
+      rpy="0 0 0" />
+    <parent
+      link="right_front_child3_link" />
+    <child
+      link="right_front_site2" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="right_front_site1"/>
+  <joint
+    name="right_front_site1_joint"
+    type="fixed">
+    <origin
+      xyz="-0.0948895634567246 0.00649999928679412 0.0703777880069802"
+      rpy="0 0 0" />
+    <parent
+      link="right_front_child2_link" />
+    <child
+      link="right_front_site1" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="right_rear_link">
+    <inertial>
+      <origin
+        xyz="-0.081258 0.008637 -0.040750"
+        rpy="0 0 0" />
+      <mass
+        value="0.408" />
+      <inertia
+        ixx="0.000658429"
+    	ixy="0.000043507"
+    	ixz="0.000958754"
+    	iyy="0.002773609"
+    	iyz="0.000018374"
+    	izz="0.002148091" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/right_rear_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/right_rear_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="right_rear_joint"
+    type="revolute">
+    <origin
+      xyz="0.89357 -1.154 1.2009"
+      rpy="0 0 -1.5708" />
+    <parent
+      link="base_link" />
+    <child
+      link="right_rear_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="right_rear_child1_link">
+    <inertial>
+      <origin
+        xyz="0.108895 0.003587 -0.079169"
+        rpy="0 0 0" />
+      <mass
+        value="0.565" />
+      <inertia
+        ixx="0.002287001"
+    	ixy="-0.000198473"
+    	ixz="-0.002669360"
+    	iyy="0.005818115"
+    	iyz="0.000148938"
+    	izz="0.003648184" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/right_rear_child1_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="1 1 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/right_rear_child1_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="right_rear_child1_joint"
+    type="revolute">
+    <origin
+      xyz="-0.19099 -0.017 -0.098723"
+      rpy="0 0 0" />
+    <parent
+      link="right_rear_link" />
+    <child
+      link="right_rear_child1_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-3.14"
+      upper="3.14"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="right_wheel_link">
+    <inertial>
+      <origin
+        xyz="-0.022405 -0.01855 -0.036197"
+        rpy="0 0 0" />
+      <mass
+        value="0.23575" />
+      <inertia
+        ixx="0.000370164"
+    	ixy="0.000000000"
+    	ixz="0.000000000"
+    	iyy="0.000719335"
+    	iyz="0.000000000"
+    	izz="0.000370164" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/right_wheel_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.86667 0.9098 1 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://串联底盘总装.SLDASM/meshes/right_wheel_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="right_wheel_joint"
+    type="revolute">
+    <origin
+      xyz="0.22642 0 -0.11511"
+      rpy="0 0 0" />
+    <parent
+      link="right_rear_child1_link" />
+    <child
+      link="right_wheel_link" />
+    <axis
+      xyz="0 1 0" />
+    <limit
+      lower="-3.1416"
+      upper="3.1416"
+      effort="0"
+      velocity="0" />
+  </joint>
+  <link
+    name="right_rear_site2"/>
+  <joint
+    name="right_rear_site2_joint"
+    type="fixed">
+    <origin
+      xyz="-0.040958 0.0075 0.043845"
+      rpy="0 0 0" />
+    <parent
+      link="right_rear_child1_link" />
+    <child
+      link="right_rear_site2" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="right_rear_site1"/>
+  <joint
+    name="right_rear_site1_joint"
+    type="fixed">
+    <origin
+      xyz="-0.088834 -0.009 -0.045918"
+      rpy="0 0 0" />
+    <parent
+      link="right_rear_link" />
+    <child
+      link="right_rear_site1" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+</robot>
