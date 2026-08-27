@@ -126,7 +126,10 @@ def raw_height_scan_obs(env: Any, num_obs: int) -> tuple[np.ndarray | None, np.n
     if base_pos.shape[0] != num_obs:
         return None, None
 
-    raw_heights = env._height_scan_sensor.scan()
+    try:
+        raw_heights = env._height_scan_sensor.scan()
+    except (ValueError, RuntimeError):
+        return None, None
     if raw_heights.shape != (num_obs, env._height_scan_dim):
         return None, None
     return np.asarray(raw_heights, dtype=get_global_dtype()), base_pos

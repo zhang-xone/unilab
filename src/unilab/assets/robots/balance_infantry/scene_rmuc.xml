@@ -1,7 +1,7 @@
 <mujoco model="Balance Infantry RMUC scene">
   <include file="balance_infantry.xml"/>
 
-  <statistic center="0 0 0.2" extent="2.0"/>
+  <statistic center="0 0 0.3" extent="5.0"/>
 
   <visual>
     <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
@@ -14,48 +14,24 @@
     <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3"
       markrgb="0.8 0.8 0.8" width="300" height="300"/>
     <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
-    <material name="pyramid_material" rgba="0.6 0.3 0.2 1"/>
-    <mesh name="pyramid_slope_03" file="crawl_slope/pyramid_slope_03.obj"/>
-    <mesh name="pyramid_slope_05" file="crawl_slope/pyramid_slope_05.obj"/>
-    <mesh name="pyramid_slope_07" file="crawl_slope/pyramid_slope_07.obj"/>
-    <mesh name="pyramid_slope_09" file="crawl_slope/pyramid_slope_09.obj"/>
-    <mesh name="pyramid_slope_11" file="crawl_slope/pyramid_slope_11.obj"/>
-    <mesh name="pyramid_slope_13" file="crawl_slope/pyramid_slope_13.obj"/>
-    <mesh name="pyramid_slope_15" file="crawl_slope/pyramid_slope_15.obj"/>
-    <mesh name="pyramid_slope" file="crawl_slope/pyramid_slope.obj"/>
-    <mesh name="crawl_slope_slope" file="crawl_slope/slope.obj"/>
-    <mesh name="ramp_05" file="crawl_slope/ramp_05.obj"/>
-    <mesh name="ramp_10" file="crawl_slope/ramp_10.obj"/>
-    <mesh name="ramp_15" file="crawl_slope/ramp_15.obj"/>
-    <mesh name="ramp_20" file="crawl_slope/ramp_20.obj"/>
-    <hfield name="hfield" file="/home/xxx/ubuntu_software/unilab/UniLab/src/unilab/assets/robots/g1/hfields/hfield.png" size="14 14 .03 0.06"/>
+    <material name="rmuc_floor_mat" rgba="0.45 0.45 0.5 1.0"/>
+    <material name="rmuc_building_mat" rgba="0.7 0.65 0.55 1.0"/>
+
+    <hfield name="rmuc_hfield" file="RMUC2026/heightmap_rect_590x330.png" size="14.725 8.225 1.8 0.001"/>
+
+    <mesh name="rmuc_floor" file="RMUC2026/RMUC20261-floor.obj"/>
+    <mesh name="rmuc_building" file="RMUC2026/RMUC20261-building_vis.obj"/>
   </asset>
 
   <worldbody>
-    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
-    <geom name="flat_main" type="box" size="5.0 5.0 0.03" material="groundplane" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="0 0 0.03"/>
-    <geom name="floor" type="plane" size="0 0 0.05" material="groundplane" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="0 0 0.0"/>
-    <geom name="pyramid_1" type="mesh" mesh="pyramid_slope_03" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="1.15 0.0 0.0"/>
-    <geom name="pyramid_2" type="mesh" mesh="pyramid_slope_05" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="-1.15 0.0 0.0"/>
-    <geom name="pyramid_3" type="mesh" mesh="pyramid_slope_07" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="0.0 1.35 0.0"/>
-    <geom name="pyramid_4" type="mesh" mesh="pyramid_slope_03" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="0.0 -1.35 0.0"/>
-    <geom name="pyramid_5" type="mesh" mesh="pyramid_slope_07" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="1.63 1.63 0.0"/>
-    <geom name="pyramid_6" type="mesh" mesh="pyramid_slope_09" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="-1.63 1.63 0.0"/>
-    <geom name="pyramid_7" type="mesh" mesh="pyramid_slope_11" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="1.63 -1.63 0.0"/>
-    <geom name="pyramid_8" type="mesh" mesh="pyramid_slope_09" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="-1.63 -1.63 0.0"/>
-    <geom name="pyramid_9" type="mesh" mesh="pyramid_slope_11" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="3.1 0.0 0.0"/>
-    <geom name="pyramid_10" type="mesh" mesh="pyramid_slope_13" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="-3.1 0.0 0.0"/>
-    <geom name="pyramid_11" type="mesh" mesh="pyramid_slope_15" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="0.0 3.1 0.0"/>
-    <geom name="pyramid_12" type="mesh" mesh="pyramid_slope_13" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001" pos="0.0 -3.1 0.0"/>
-    <geom name="crawl_slope_slope" type="mesh" mesh="crawl_slope_slope" pos="0 0 -0.02" material="pyramid_material" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
-    <geom name="ramp_05" type="mesh" mesh="ramp_05" pos="-5 0 -0.02" material="pyramid_material" contype="1" conaffinity="1" friction="0.3 0.005 0.0001"/>
-    <geom name="ramp_10" type="mesh" mesh="ramp_10" pos="-2.5 0 -0.02" material="pyramid_material" contype="1" conaffinity="1" friction="0.6 0.005 0.0001"/>
-    <geom name="ramp_15" type="mesh" mesh="ramp_15" pos="0 0 -0.02" material="pyramid_material" contype="1" conaffinity="1" friction="0.9 0.005 0.0001"/>
-    <geom name="ramp_20" type="mesh" mesh="ramp_20" pos="2.5 0 -0.02" material="pyramid_material" contype="1" conaffinity="1" friction="1.2 0.005 0.0001"/>
-    <geom name="terrain_floor" type="hfield" hfield="hfield" material="groundplane" contype="1" conaffinity="1" priority="1" friction="1.0"/>
+    <light pos="0 0 3.0" dir="0 0 -1" directional="true"/>
+    <geom name="floor_plane" size="0 0 0.05" type="plane" material="groundplane" contype="1" conaffinity="1" condim="6" friction="1.0 0.005 0.0001"/>
+    <geom name="floor" type="hfield" hfield="rmuc_hfield" pos="14.901 8.025 -0.15" contype="1" conaffinity="1" condim="6" friction="1.0 0.005 0.0001" rgba="0 0 0 0"/>
+    <geom name="rmuc_floor" type="mesh" mesh="rmuc_floor" material="rmuc_floor_mat" pos="0 0 -0.15" quat="0.707107 0.707107 0 0" contype="0" conaffinity="0"/>
+    <geom name="rmuc_building" type="mesh" mesh="rmuc_building" material="rmuc_building_mat" pos="0 0 -0.15" quat="0.707107 0.707107 0 0" contype="0" conaffinity="0"/>
   </worldbody>
 
   <keyframe>
-    <key name="home" qpos="0.000000 0.000000 0.400000 1.000000 0.000000 0.000000 0.000000 0.239130 -0.520634 0.284200 -0.486861 -0.519644 0.563946 -0.874393 0.162861 -0.480007 0.287870 -0.455611 -0.497974 0.507563 0.334914" />
+    <key name="home" qpos="5.084 8.025 0.800000 1.000000 0.000000 0.000000 0.000000 0.239130 -0.520634 0.284200 -0.486861 -0.519644 0.563946 -0.874393 0.162861 -0.480007 0.287870 -0.455611 -0.497974 0.507563 0.334914" />
   </keyframe>
 </mujoco>

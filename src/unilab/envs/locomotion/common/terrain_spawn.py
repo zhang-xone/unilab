@@ -70,6 +70,7 @@ class TerrainSpawnManager(BaseSpawnManager):
         cfg: TerrainCurriculumCfg,
         terrain_surface_sampler: object | None = None,
         spawn_height_points: np.ndarray | None = None,
+        terrain_type_names: list[str] | None = None,
     ) -> None:
         if terrain_origins.ndim != 3 or terrain_origins.shape[2] != 3:
             raise ValueError(
@@ -88,6 +89,10 @@ class TerrainSpawnManager(BaseSpawnManager):
         self._cell_size = float(cell_size)
         self._cfg = cfg
         self._terrain_surface_sampler = terrain_surface_sampler
+        if terrain_type_names is not None:
+            self._terrain_type_names = list(terrain_type_names)
+        else:
+            self._terrain_type_names = [str(i) for i in range(num_cols)]
         if spawn_height_points is None:
             self._spawn_height_points = np.zeros((1, 3), dtype=np.float64)
         else:
@@ -119,6 +124,10 @@ class TerrainSpawnManager(BaseSpawnManager):
         out = self._terrain_origins[rows, cols].copy()
         out[:, 2] += self._cfg.spawn_height_margin
         return out
+
+    def get_terrain_type_for(self, env_ids: np.ndarray) -> list[str]:
+        cols = self.type_cols[env_ids]
+        return [self._terrain_type_names[c] for c in cols]
 
     def apply_spawn(
         self,

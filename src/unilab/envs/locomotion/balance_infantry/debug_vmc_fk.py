@@ -18,7 +18,7 @@ OFFSET_PHI4 = np.pi / 6        # 30°
 # 映射: φ₁=后大腿(LR/RR), φ₄=前大腿(LF/RF)
 
 
-def forward_kinematics_fivebar(phi1, phi4):
+def forward_kinematics_fivebar(phi1, phi4, debug=False):
     x_B = L1 * np.cos(phi1)
     y_B = L1 * np.sin(phi1)
     x_D = L5 + L4 * np.cos(phi4)
@@ -39,6 +39,11 @@ def forward_kinematics_fivebar(phi1, phi4):
     x_C = x_B + L2 * np.cos(phi2)
     y_C = y_B + L2 * np.sin(phi2)  
     x_C_shifted = x_C - L5 / 2.0
+
+    if debug:
+        print(f"    FK: B=({x_B:.4f},{y_B:.4f}) D=({x_D:.4f},{y_D:.4f}) BD={np.sqrt(BD_sq):.4f}")
+        print(f"    A0={A0:.4f} b0={b0:.4f} C0={C0:.4f} disc={disc:.4f}")
+        print(f"    phi2={np.rad2deg(phi2):.1f}° C=({x_C:.4f},{y_C:.4f}) shifted=({x_C_shifted:.4f},{y_C:.4f})")
 
     L0 = np.sqrt(x_C_shifted * x_C_shifted + y_C * y_C)
     phi0 = np.arctan2(y_C, x_C_shifted)
@@ -80,8 +85,35 @@ def compute_vmc_state(m, d):
     }
 
 
+def compute_sensor_swing_theta(m, d):
+    hip_z = 0.141
+
+    bw_lw = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, "left_wheel_link")
+    bw_rw = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, "right_wheel_link")
+    base_pos = d.qpos[0:3].copy()
+    base_quat = d.qpos[3:7].copy()
+    R_flat = np.zeros(9)
+    mujoco.mju_quat2Mat(R_flat, base_quat)
+    R_base = R_flat.reshape(3, 3)
+
+    wheel_world = [d.xpos[bw_lw].copy(), d.xpos[bw_rw].copy()]
+    wheel_positions = [R_base.T @ (wheel_world[i] - base_pos) for i in range(2)]
+
+    thetas = []
+    for leg in range(2):
+        wp = wheel_positions[leg]
+        theta = np.arctan2(wp[0], -(wp[2] - hip_z))
+        thetas.append(theta)
+
+    return thetas, wheel_positions
+
+
 def print_status(m, d):
     s = compute_vmc_state(m, d)
+    sensor_theta, wheel_pos = compute_sensor_swing_theta(m, d)
+
+    vmc_theta_body = [np.pi / 2 - s["phi0"][0], np.pi / 2 - s["phi0"][1]]
+
     print(
         f"  joint=[{s['joint'][0]:+.3f}, {s['joint'][1]:+.3f}, "
         f"{s['joint'][2]:+.3f}, {s['joint'][3]:+.3f}]  "
@@ -90,6 +122,39 @@ def print_status(m, d):
         f"L₀=[{s['L0'][0]:.4f}, {s['L0'][1]:.4f}]  "
         f"φ₀=[{np.rad2deg(s['phi0'][0]):+.1f}°, {np.rad2deg(s['phi0'][1]):+.1f}°]"
     )
+    print(
+        f"  Swing θ: sensor=[{np.rad2deg(sensor_theta[0]):+.1f}°, {np.rad2deg(sensor_theta[1]):+.1f}°]  "
+        f"VMC=[{np.rad2deg(vmc_theta_body[0]):+.1f}°, {np.rad2deg(vmc_theta_body[1]):+.1f}°]  "
+        f"Δ=[{np.rad2deg(sensor_theta[0] - vmc_theta_body[0]):+.1f}°, "
+        f"{np.rad2deg(sensor_theta[1] - vmc_theta_body[1]):+.1f}°]"
+    )
+    hip_z = 0.141
+    hip_y = np.array([+0.187, -0.187])
+    sensor_L = []
+    for leg in range(2):
+        dx = wheel_pos[leg][0] - 0.0
+        dz = wheel_pos[leg][2] - hip_z
+        sensor_L.append(np.sqrt(dx * dx + dz * dz))
+    print(
+        f"  leg_len: sensor=[{sensor_L[0]:.4f}, {sensor_L[1]:.4f}]  "
+        f"VMC=[{s['L0'][0]:.4f}, {s['L0'][1]:.4f}]  "
+        f"Δ=[{sensor_L[0] - s['L0'][0]:+.4f}, {sensor_L[1] - s['L0'][1]:+.4f}]"
+    )
+    print(
+        f"  wheel_base: L=({wheel_pos[0][0]:+.4f},{wheel_pos[0][1]:+.4f},{wheel_pos[0][2]:+.4f})  "
+        f"R=({wheel_pos[1][0]:+.4f},{wheel_pos[1][1]:+.4f},{wheel_pos[1][2]:+.4f})"
+    )
+    for leg in range(2):
+        L0_i = s['L0'][leg]
+        phi0_i = s['phi0'][leg]
+        x_c = L0_i * np.cos(phi0_i)
+        z_c = hip_z - L0_i * np.sin(phi0_i)
+        sign = "L" if leg == 0 else "R"
+        print(
+            f"  VMC C_{sign}: (x={x_c:+.4f}, z={z_c:+.4f})  "
+            f"wheel: (x={wheel_pos[leg][0]:+.4f}, z={wheel_pos[leg][2]:+.4f})  "
+            f"Δx={wheel_pos[leg][0]-x_c:+.4f}  Δz={wheel_pos[leg][2]-z_c:+.4f}"
+        )
 
 
 # ============================================================
@@ -239,6 +304,32 @@ paused_flag = {"paused": False}
 test_mode = {"active": False, "step": 0, "phase_steps": [20, 40, 20], "F": +50.0, "T": +10.0,
               "phase": 0, "L0_before": None, "phi0_before": None, "dof_map": None}
 
+# PD VMC test mode
+pd_test = {
+    "active": False,
+    "step": 0,
+    "total_steps": 500,
+    "theta_ref_amp": np.deg2rad(10.0),  # θ_ref 振幅 ±10°
+    "theta_ref_freq": 2.0,               # 频率 2Hz
+    "L0_ref_center": 0.28,               # L0_ref 中心
+    "L0_ref_amp": 0.04,                  # L0_ref 振幅 ±4cm
+    "L0_ref_freq": 1.5,                  # 频率 1.5Hz
+    "kp_theta": 100.0,
+    "kd_theta": 5.0,
+    "kp_l0": 1500.0,
+    "kd_l0": 80.0,
+    "ff": 0.0,
+    "last_theta": [0.0, 0.0],
+    "last_L0": [0.28, 0.28],
+    "theta_hist": [],
+    "pitch_hist": [],
+    "T_hist": [],
+    "theta_ref_hist": [],
+    "L0_ref_hist": [],
+    "L0_hist": [],
+    "dof_map": None,
+}
+
 def test_vmc_physics(m, d):
     s = compute_vmc_state(m, d)
     F_test = test_mode["F"]
@@ -301,6 +392,152 @@ def apply_phase_torque(m, d, phase):
     test_mode["phi0_before"] = s["phi0"]
 
 
+def apply_pd_vmc(m, d, step):
+    """单步 PD VMC 控制（周期性目标）"""
+    s = compute_vmc_state(m, d)
+
+    dt = 0.002
+    t = step * dt
+
+    theta_ref = pd_test["theta_ref_amp"] * np.sin(2 * np.pi * pd_test["theta_ref_freq"] * t)
+    L0_ref = pd_test["L0_ref_center"] + pd_test["L0_ref_amp"] * np.sin(2 * np.pi * pd_test["L0_ref_freq"] * t)
+
+    theta_l = np.pi / 2 - s["phi0"][0]
+    theta_r = np.pi / 2 - s["phi0"][1]
+
+    if step == 0:
+        pd_test["last_theta"] = [theta_l, theta_r]
+        pd_test["last_L0"] = [s["L0"][0], s["L0"][1]]
+    theta_dot_l = (theta_l - pd_test["last_theta"][0]) / dt
+    theta_dot_r = (theta_r - pd_test["last_theta"][1]) / dt
+    L0_dot_l = (s["L0"][0] - pd_test["last_L0"][0]) / dt
+    L0_dot_r = (s["L0"][1] - pd_test["last_L0"][1]) / dt
+    pd_test["last_theta"] = [theta_l, theta_r]
+    pd_test["last_L0"] = [s["L0"][0], s["L0"][1]]
+
+    T_l = pd_test["kp_theta"] * (theta_l - theta_ref) + pd_test["kd_theta"] * theta_dot_l
+    T_r = pd_test["kp_theta"] * (theta_r - theta_ref) + pd_test["kd_theta"] * theta_dot_r
+
+    F_l = pd_test["kp_l0"] * (L0_ref - s["L0"][0]) + pd_test["kd_l0"] * (-L0_dot_l) + pd_test["ff"]
+    F_r = pd_test["kp_l0"] * (L0_ref - s["L0"][1]) + pd_test["kd_l0"] * (-L0_dot_r) + pd_test["ff"]
+
+    taus = []
+    for leg in range(2):
+        phi1 = s["phi1"][leg]
+        phi4 = s["phi4"][leg]
+        phi0 = s["phi0"][leg]
+        phi2 = s["phi2"][leg]
+        phi3 = s["phi3"][leg]
+        sigma1 = s["sigma1"][leg]
+        L0 = s["L0"][leg]
+        F = [F_l, F_r][leg]
+        T = [T_l, T_r][leg]
+
+        sigma2 = np.sin(phi3 - phi4)
+        sigma3 = np.sin(phi1 - phi2)
+        eps = 1e-8
+        inv_sigma1 = 1.0 / (sigma1 + eps)
+        inv_L0 = 1.0 / (L0 + eps)
+
+        J00 = L1 * np.sin(phi0 - phi3) * sigma3 * inv_sigma1
+        J01 = L1 * np.cos(phi0 - phi3) * sigma3 * inv_L0 * inv_sigma1
+        J10 = L4 * np.sin(phi0 - phi2) * sigma2 * inv_sigma1
+        J11 = L4 * np.cos(phi0 - phi2) * sigma2 * inv_L0 * inv_sigma1
+
+        tau1 = J00 * F + J01 * T
+        tau4 = J10 * F + J11 * T
+        taus.append((tau4, tau1))
+
+    dm = pd_test["dof_map"]
+    d.qfrc_applied[dm["left_front_joint"]] = taus[0][0]
+    d.qfrc_applied[dm["right_front_joint"]] = taus[1][0]
+    d.qfrc_applied[dm["left_rear_joint"]] = taus[0][1]
+    d.qfrc_applied[dm["right_rear_joint"]] = taus[1][1]
+
+    pitch = np.arcsin(np.clip(-d.qpos[3:7] @ np.array([0, 0, 1, 0]), -1, 1))
+    pd_test["theta_hist"].append((theta_l, theta_r))
+    pd_test["pitch_hist"].append(pitch)
+    pd_test["T_hist"].append((T_l, T_r))
+    pd_test["theta_ref_hist"].append(theta_ref)
+    pd_test["L0_ref_hist"].append(L0_ref)
+    pd_test["L0_hist"].append((s["L0"][0], s["L0"][1]))
+
+    return theta_l, theta_r, theta_ref, L0_ref, T_l, T_r, F_l, F_r, pitch
+
+
+def add_vmc_visualization(v, m, d):
+    """在 viewer 中标注: 髋节点(红) / VMC C点(绿) / 轮子(蓝) / 箭头"""
+    s = compute_vmc_state(m, d)
+
+    base_pos = d.qpos[0:3].copy()
+    base_quat = d.qpos[3:7].copy()
+    R_base_flat = np.zeros(9)
+    mujoco.mju_quat2Mat(R_base_flat, base_quat)
+    R_base = R_base_flat.reshape(3, 3)
+
+    hip_y = np.array([+0.187, -0.187])
+    hip_z = 0.141
+
+    scn = v.user_scn
+    scn.ngeom = 0
+    idx = 0
+
+    def add_sphere(pos, rgba, radius=0.012):
+        nonlocal idx
+        if idx >= 200:
+            return
+        mujoco.mjv_initGeom(
+            scn.geoms[idx],
+            type=mujoco.mjtGeom.mjGEOM_SPHERE,
+            size=[radius, 0, 0],
+            pos=pos,
+            mat=np.eye(3).ravel(),
+            rgba=rgba,
+        )
+        idx += 1
+
+    def add_arrow(fr, to, rgba, width=0.006):
+        nonlocal idx
+        if idx >= 199:
+            return
+        mujoco.mjv_initGeom(
+            scn.geoms[idx],
+            type=mujoco.mjtGeom.mjGEOM_ARROW,
+            size=[width, 0, 0],
+            pos=fr,
+            mat=np.eye(3).ravel(),
+            rgba=rgba,
+        )
+        idx += 1
+        mujoco.mjv_connector(
+            scn.geoms[idx],
+            type=mujoco.mjtGeom.mjGEOM_ARROW,
+            width=width,
+            from_=fr.astype(np.float64),
+            to=to.astype(np.float64),
+        )
+        idx += 1
+
+    for leg in range(2):
+        hip_local = np.array([0.0, hip_y[leg], hip_z])
+        hip_world = base_pos + R_base @ hip_local
+
+        L0_val = s["L0"][leg]
+        phi0_val = s["phi0"][leg]
+        vmc_c_local = np.array([L0_val * np.cos(phi0_val), hip_y[leg], hip_z - L0_val * np.sin(phi0_val)])
+        vmc_c_world = base_pos + R_base @ vmc_c_local
+
+        wheel_name = "left_wheel" if leg == 0 else "right_wheel"
+        body_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, wheel_name)
+        wheel_world = d.xpos[body_id].copy()
+
+        add_sphere(hip_world, [1, 0, 0, 1], 0.015)
+        add_sphere(vmc_c_world, [0, 1, 0, 1], 0.012)
+        add_sphere(wheel_world, [0, 0.5, 1, 1], 0.012)
+        add_arrow(hip_world, vmc_c_world, [0, 1, 0, 0.8], 0.004)
+        add_arrow(hip_world, wheel_world, [0, 0.5, 1, 0.8], 0.004)
+
+
 def on_key(keycode):
     if keycode == ord(" "):
         paused_flag["paused"] = not paused_flag["paused"]
@@ -312,6 +549,21 @@ def on_key(keycode):
         return
     if keycode in (ord("T"), ord("t")):
         test_vmc_physics(m, d)
+        return
+    if keycode in (ord("P"), ord("p")):
+        dm = {}
+        for name in ["left_front_joint", "right_front_joint", "left_rear_joint", "right_rear_joint"]:
+            jid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, name)
+            dm[name] = m.jnt_dofadr[jid]
+        pd_test.update({"active": True, "step": 0, "dof_map": dm,
+                        "theta_hist": [], "pitch_hist": [], "T_hist": [],
+                        "theta_ref_hist": [], "L0_ref_hist": [], "L0_hist": []})
+        print(f"\n{'='*60}")
+        print(f"PD VMC: θ_ref=±{np.rad2deg(pd_test['theta_ref_amp']):.0f}° @{pd_test['theta_ref_freq']}Hz, "
+              f"L0_ref={pd_test['L0_ref_center']:.3f}±{pd_test['L0_ref_amp']:.3f}m @{pd_test['L0_ref_freq']}Hz, "
+              f"kp_θ={pd_test['kp_theta']}, kd_θ={pd_test['kd_theta']}, "
+              f"kp_L0={pd_test['kp_l0']}, kd_L0={pd_test['kd_l0']}")
+        print(f"{'='*60}")
         return
     if keycode in (ord("V"), ord("v")):
         qpos_list = ["%.6f" % d.qpos[i] for i in range(len(d.qpos))]
@@ -431,6 +683,31 @@ with mujoco.viewer.launch_passive(m, d, key_callback=on_key) as v:
                         print(f"    净力矩冲量: 0 (10*(+50)+20*(-50)+10*(+50)=0)")
                         test_mode["active"] = False
                         print(f"{'='*70}\n")
+        elif pd_test["active"]:
+            theta_l, theta_r, theta_ref, L0_ref, T_l, T_r, F_l, F_r, pitch = apply_pd_vmc(m, d, pd_test["step"])
+            mujoco.mj_step(m, d)
+            pd_test["step"] += 1
+
+            if pd_test["step"] % 50 == 0:
+                print(f"  step={pd_test['step']:4d}  "
+                      f"θ_ref={np.rad2deg(theta_ref):+.1f}° → θ=({np.rad2deg(theta_l):+.1f}°,{np.rad2deg(theta_r):+.1f}°)  "
+                      f"L0_ref={L0_ref:.3f}  "
+                      f"VMC_T=({T_l:+.2f},{T_r:+.2f})N·m  "
+                      f"VMC_F=({F_l:+.2f},{F_r:+.2f})N")
+
+            if pd_test["step"] >= pd_test["total_steps"]:
+                pd_test["active"] = False
+                T_hist = np.array(pd_test["T_hist"])
+                theta_hist = np.array(pd_test["theta_hist"])
+                theta_ref_hist = np.array(pd_test["theta_ref_hist"])
+                L0_hist = np.array(pd_test["L0_hist"])
+                L0_ref_hist = np.array(pd_test["L0_ref_hist"])
+                print(f"\n--- PD VMC 结果 ({pd_test['total_steps']} steps) ---")
+                print(f"  VMC_T 均值: ({np.mean(T_hist[:,0]):+.2f}, {np.mean(T_hist[:,1]):+.2f}) N·m")
+                print(f"  VMC_T 峰值: ({np.max(np.abs(T_hist[:,0])):.2f}, {np.max(np.abs(T_hist[:,1])):.2f}) N·m")
+                print(f"  θ 跟踪误差 RMS: {np.rad2deg(np.sqrt(np.mean((theta_hist[:,0] - theta_ref_hist)**2))):.1f}°")
+                print(f"  L0 跟踪误差 RMS: {np.sqrt(np.mean((L0_hist[:,0] - L0_ref_hist)**2))*1000:.1f}mm")
+                print(f"{'='*60}\n")
         elif not paused_flag["paused"]:
             mujoco.mj_step(m, d)
             if d.ncon > 0 and frame < 5:
@@ -450,8 +727,10 @@ with mujoco.viewer.launch_passive(m, d, key_callback=on_key) as v:
         d.qpos[5] = 0.0
         d.qpos[6] = 0.0
         d.qvel[0:6] = 0.0
+        mujoco.mj_forward(m, d)
         frame += 1
         if frame % print_period == 0:
             print_status(m, d)
+        add_vmc_visualization(v, m, d)
         v.sync()
         time.sleep(0.016)

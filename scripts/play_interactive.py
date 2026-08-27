@@ -218,9 +218,10 @@ def _algo_config_dict(cfg: DictConfig | None) -> dict[str, Any]:
     return cast(dict[str, Any], train_cfg_raw)
 
 
-SUPPORTED_INTERACTIVE_ALGOS = ("ppo", "appo", "sac", "flashsac", "hora_distill")
+SUPPORTED_INTERACTIVE_ALGOS = ("ppo", "ppo_sequence", "appo", "sac", "flashsac", "hora_distill")
 _CONFIG_ROOT_BY_ALGO = {
     "ppo": "ppo",
+    "ppo_sequence": "ppo_sequence",
     "appo": "appo",
     "sac": "offpolicy",
     "flashsac": "offpolicy",
@@ -1038,6 +1039,97 @@ def _print_keyboard_legend(commander: KeyboardCommander | None, env: Any = None)
     print("  Enter        : full stop")
 
 
+def _create_sequence_playback_session(
+    *,
+    playback_cfg: RslRlPlaybackConfig,
+    env_factory,
+    algo_config: dict[str, Any],
+    root_dir: str | Path,
+    device: str | None,
+    checkpoint_resolver,
+    entrypoint_log_root,
+    log,
+):
+    from unilab.training.rsl_rl_sequence import UniLabSequenceVecEnv
+    from unilab.algos.torch.ppo.rsl_rl.runners import OnPolicyRunner as SequenceRunner
+    from unilab.visualization.interactive_playback import RslRlPlaybackSession
+
+    device_name = select_torch_device() if device is None else str(device)
+    env = env_factory(int(playback_cfg.num_envs))
+
+    obs_history_length = int(algo_config.get("obs_history_length", 5))
+    seq_env = UniLabSequenceVecEnv(env, device=device_name, obs_history_length=obs_history_length)
+
+    policy_obs_mode = "flat"
+
+    checkpoint_path = None
+    policy = None
+    if playback_cfg.action_mode == "policy":
+        checkpoint_path = checkpoint_resolver(
+            playback_cfg.task,
+            playback_cfg.load_run,
+            playback_cfg.checkpoint,
+            playback_cfg.algo_log_name,
+            playback_cfg.log_root,
+        )
+        if checkpoint_path is None:
+            log("WARNING: no checkpoint found - falling back to zero actions.")
+        else:
+            log(f"Loading checkpoint: {checkpoint_path}")
+            log_dir = str(
+                entrypoint_log_root(
+                    Path(root_dir),
+                    algo_log_name=playback_cfg.algo_log_name,
+                    log_root=playback_cfg.log_root,
+                )
+                / playback_cfg.task
+                / "play_temp"
+            )
+            train_cfg = {
+                "runner": dict(algo_config.get("runner", {})),
+                "algorithm": dict(algo_config.get("algorithm", {})),
+                "policy": dict(algo_config.get("policy", {})),
+            }
+            train_cfg["runner"]["logger"] = "none"
+            runner = SequenceRunner(seq_env, train_cfg, log_dir=log_dir, device=device_name)
+            runner.load(checkpoint_path, load_optimizer=False)
+            policy = runner.get_inference_policy(device=device_name)
+
+    class _SeqAdapter:
+        def __init__(self, seq_env, device):
+            self._seq_env = seq_env
+            self._device = device
+            self._obs_history = None
+
+        def reset(self):
+            obs, self._obs_history = self._seq_env.reset()
+            return obs, {}
+
+        def step(self, actions):
+            obs, priv, rew, dones, infos, self._obs_history = self._seq_env.step(actions)
+            return obs, rew, dones, infos
+
+    adapter = _SeqAdapter(seq_env, device_name)
+
+    wrapped_policy = None
+    if policy is not None:
+        def _policy_wrapper(obs):
+            actions, _ = policy(obs, adapter._obs_history)
+            return actions
+        wrapped_policy = _policy_wrapper
+
+    log(f"Action mode: {playback_cfg.action_mode}")
+    session = RslRlPlaybackSession(
+        env=env,
+        wrapped_env=adapter,
+        device=device_name,
+        action_mode=playback_cfg.action_mode,
+        policy=wrapped_policy,
+        num_envs=playback_cfg.num_envs,
+    )
+    return session, policy_obs_mode, checkpoint_path
+
+
 def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = None):
     device = _select_playback_device(cfg)
     print(f"[play_interactive] Device: {device}")
@@ -1106,6 +1198,17 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
                 runner_cls=OnPolicyRunner,
                 policy_obs_dims_getter=get_policy_obs_dims,
                 train_cfg_normalizer=normalize_ppo_train_cfg,
+                log=lambda message: print(f"[play_interactive] {message}"),
+            )
+        elif algo == "ppo_sequence":
+            session = _create_sequence_playback_session(
+                playback_cfg=playback_cfg,
+                env_factory=_create_env,
+                algo_config=_algo_config_dict(cfg),
+                root_dir=ROOT_DIR,
+                device=device,
+                checkpoint_resolver=resolve_checkpoint,
+                entrypoint_log_root=get_entrypoint_log_root,
                 log=lambda message: print(f"[play_interactive] {message}"),
             )
         elif algo == "appo":

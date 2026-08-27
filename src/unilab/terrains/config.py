@@ -20,6 +20,7 @@ from typing import Any, TypeVar
 from unilab.terrains.heightfield_terrains import (
     HfFlatTerrainCfg,
     HfInvertedPyramidStairsTerrainCfg,
+    HfPlateauTerrainCfg,
     HfPyramidSlopedTerrainCfg,
     HfPyramidStairsTerrainCfg,
     HfRandomUniformTerrainCfg,
@@ -115,6 +116,17 @@ def wave_terrain(**overrides: Any) -> HfWaveTerrainCfg:
     )
     defaults.update(overrides)
     return HfWaveTerrainCfg(**defaults)
+
+
+@terrain_preset
+def plateau(**overrides: Any) -> HfPlateauTerrainCfg:
+    defaults: dict[str, Any] = dict(
+        platform_height_range=(0.05, 0.45),
+        platform_width=3.0,
+        border_width=0.5,
+    )
+    defaults.update(overrides)
+    return HfPlateauTerrainCfg(**defaults)
 
 
 # Named terrain sets.

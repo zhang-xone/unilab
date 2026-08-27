@@ -20,6 +20,11 @@ WHEEL_JOINT_INDICES = (4, 5)         # LW, RW
 NUM_LEG_ACTIONS = len(LEG_JOINT_INDICES)
 NUM_WHEEL_ACTIONS = len(WHEEL_JOINT_INDICES)
 
+WHEEL_RADIUS = 0.06
+WHEELBASE = 0.380
+WHEEL_ERR_VEL_THRESHOLD = 0.3
+WHEEL_ERR_DECAY_STEPS = 4
+
 # action=0 对应的 target joint_pos（机器人自然站立时的关节角度）
 # 顺序: [左前腿, 右前腿, 左后腿, 右后腿, 左轮子, 右轮子]
 DEFAULT_ANGLES: np.ndarray = np.array(
@@ -60,7 +65,10 @@ def stack_joint_sensors(backend, suffix: str, *, dtype: np.dtype | type) -> np.n
 # === 配置类
 @dataclass
 class NoiseConfig(BaseNoiseConfig):
-    pass
+    scale_vmc_phi0: float = 0.008
+    scale_vmc_L0: float = 0.003
+    scale_vmc_phi0_dot: float = 0.3
+    scale_vmc_L0_dot: float = 0.2
 
 
 @dataclass
@@ -84,11 +92,12 @@ class VMCConfig:
         feedforward_force: 重力补偿前馈力 (N)
 
     动作缩放:
-        action_scale_theta: action → phi0_ref 缩放
+        action_scale_theta: action → θ_ref 缩放 (±50°=±0.87rad)
         action_scale_l0: action → L0_ref 缩放
         action_scale_wheel: action → wheel_ref 缩放
+        default_L0: action=0 时的默认腿长 (m)
     """
-    enabled: bool = False
+    enabled: bool = True
     L1: float = 0.215
     L2: float = 0.254
     L3: float = 0.254
@@ -96,32 +105,30 @@ class VMCConfig:
     L5: float = 0.0
     kp_theta: float = 50.0
     kd_theta: float = 3.0
-    kp_l0: float = 900.0
-    kd_l0: float = 20.0
-    feedforward_force: float = 40.0
-    action_scale_theta: float = 0.5
-    action_scale_l0: float = 0.1
+    kp_l0: float = 500.0
+    kd_l0: float = 50.0
+    feedforward_force: float = 90.0
+    action_scale_theta: float = 0.7
+    action_scale_l0: float = 0.15
     action_scale_wheel: float = 10.0
+    default_L0: float = 0.28
+    theta_clip: float = 0.5
+    L0_clip: tuple[float, float] = (0.15, 0.45)
 
 
 @dataclass
 class ControlConfig(PdControlConfig):
-    """PD 控制参数（每关节独立配置）
-
-    leg_kp/leg_kd 长度 4（对应 LEG_JOINT_INDICES = (LF, RF, LR, RR)）。
-    wheel_kd 长度 2：[LW, RW]。"""
-    leg_kp: tuple = (40, 40, 40, 40)
-    leg_kd: tuple = (3, 3, 3, 3)
-    action_scale: float = 1
+    """PD 控制参数（每关节独立配置）。wheel_kd 长度 2：[LW, RW]。"""
     wheel_kd: tuple = (1.6, 1.6)
-    wheel_action_scale: float = 5.0
-
+    leg_kp: tuple = (80., 80., 80., 80.)
+    leg_kd: tuple = (4., 4., 4., 4.)
     clip_actions: float = 1.0
+    action_scale_joint: float = 0.5
+    action_scale_wheel: float = 10.0
     action_clip_initial: float = 0.3
     action_smoothing: float = 0.8
     action_smoothing_range: tuple = (0.2, 1.0)
-    ctrl_latency_range_ms: tuple = (0, 0)
-    latency_curriculum: bool = False
+    action_delay_range: tuple = (0, 0)  # (min, max) substeps, FIFO 随机延迟
     vmc: VMCConfig = field(default_factory=VMCConfig)
 
 
@@ -138,6 +145,8 @@ class BalanceInfantryBaseCfg(LocomotionBaseCfg):
     asset: Asset = field(default_factory=Asset)
     sim_dt: float = 0.002
     ctrl_dt: float = 0.02
+    obs_manual_norm: bool = True
+    obs_vel: bool = False
 
 
 # === VMC (Virtual Model Control) 五连杆辅助函数 ====================
@@ -262,6 +271,9 @@ def vmc_mapping_fivebar(
     tau1 = J00 * F + J01 * T
     tau4 = J10 * F + J11 * T
 
+    tau1 = np.nan_to_num(tau1, nan=0.0, posinf=40.0, neginf=-40.0)
+    tau4 = np.nan_to_num(tau4, nan=0.0, posinf=40.0, neginf=-40.0)
+
     return tau1, tau4
 
 
@@ -273,17 +285,18 @@ def compute_vmc_torques_fivebar(
     phi3: np.ndarray,
     sigma1: np.ndarray,
     L0: np.ndarray,
-    phi0_dot: np.ndarray,
     L0_dot: np.ndarray,
-    phi0_ref: np.ndarray,
+    theta: np.ndarray,
+    theta_dot: np.ndarray,
+    theta_ref: np.ndarray,
     L0_ref: np.ndarray,
     L1: float,
     L4: float,
-    kp_theta: float,
-    kd_theta: float,
-    kp_l0: float,
-    kd_l0: float,
-    feedforward_force: float,
+    kp_theta: np.ndarray,
+    kd_theta: np.ndarray,
+    kp_l0: np.ndarray,
+    kd_l0: np.ndarray,
+    feedforward_force: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
     """五连杆完整 VMC: 虚拟空间 PD → 雅可比映射 → 关节力矩
 
@@ -293,20 +306,21 @@ def compute_vmc_torques_fivebar(
         phi2, phi3: 中间角度, shape (num_envs, 2)
         sigma1: sin(φ₃-φ₂), shape (num_envs, 2)
         L0: 虚拟腿长, shape (num_envs, 2)
-        phi0_dot: 虚拟腿角速度, shape (num_envs, 2)
         L0_dot: 虚拟腿长速度, shape (num_envs, 2)
-        phi0_ref: 目标虚拟腿角度, shape (num_envs, 2)
+        theta: 当前摆角 θ, shape (num_envs, 2)
+        theta_dot: 摆角速度, shape (num_envs, 2)
+        theta_ref: 目标摆角 θ (相对竖直), shape (num_envs, 2)
         L0_ref: 目标虚拟腿长, shape (num_envs, 2)
         L1, L4: 杆长
         kp_theta, kd_theta: 腿角度 PD 增益
         kp_l0, kd_l0: 腿长 PD 增益
-        feedforward_force: 重力补偿前馈力
+        feedforward_force: 重力补偿前馈力, shape (num_envs, 2)
 
     Returns:
         tau1: φ₁ (后大腿) 电机力矩, shape (num_envs, 2)
         tau4: φ₄ (前大腿) 电机力矩, shape (num_envs, 2)
     """
-    T = kp_theta * (phi0_ref - phi0) - kd_theta * phi0_dot
+    T = kp_theta * (theta - theta_ref) + kd_theta * theta_dot
     F = kp_l0 * (L0_ref - L0) - kd_l0 * L0_dot + feedforward_force
 
     return vmc_mapping_fivebar(F, T, phi1, phi4, phi0, phi2, phi3, sigma1, L0, L1, L4)

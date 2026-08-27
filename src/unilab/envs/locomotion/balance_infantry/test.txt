@@ -1,5 +1,5 @@
 PYTHONUNBUFFERED=1 uv run train \
-  --algo ppo \
+  --algo ppo_sequence \
   --task balance_infantry_joystick_flat \
   --sim mujoco \
   algo.max_iterations=1500 \
@@ -8,22 +8,49 @@ PYTHONUNBUFFERED=1 uv run train \
   training.logger=tensorboard
 
 PYTHONUNBUFFERED=1 uv run train \
-  --algo ppo \
+  --algo ppo_sequence \
   --task balance_infantry_joystick_flat \
   --sim mujoco \
-  algo.load_run="2026-08-12_17-55-25_mujoco" \
+  algo.load_run="2026-08-27_15-55-47_mujoco" \
   algo.checkpoint=-1 \
   algo.max_iterations=1500 \
   algo.num_steps_per_env=24 \
   training.no_play=true
 
 uv run scripts/play_interactive.py \
-  --algo ppo \
+  --algo ppo_sequence \
   --task balance_infantry_joystick_flat \
   --sim mujoco \
   algo.load_run=-1 \
   algo.checkpoint=-1 \
   interactive.action_mode=policy \
+  interactive.keyboard=true \
+  +interactive.require_keyboard_command_obs=false \
+  algo.num_envs=1 \
+  training.device=null \
+  interactive.speed=1.0
+
+  random,policy,zero
+  ppo_sequence
+  
+  cd /home/xxx/ubuntu_software/unilab/UniLab && python src/unilab/envs/locomotion/balance_infantry/debug_vmc_fk.py
+  
+  PYTHONUNBUFFERED=1 uv run train \
+  --algo ppo_him \
+  --task balance_infantry_joystick_flat \
+  --sim mujoco \
+  algo.max_iterations=1500 \
+  algo.num_steps_per_env=24 \
+  training.no_play=false \
+  training.logger=tensorboard
+
+  uv run scripts/play_interactive.py \
+  --algo ppo_him \
+  --task balance_infantry_joystick_flat \
+  --sim mujoco \
+  algo.load_run=-1 \
+  algo.checkpoint=-1 \
+  interactive.action_mode=random \
   interactive.keyboard=true \
   +interactive.require_keyboard_command_obs=false \
   algo.num_envs=1 \

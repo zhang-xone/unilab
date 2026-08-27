@@ -18,7 +18,7 @@
 
   <worldbody>
     <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
-    <geom name="floor" type="hfield" hfield="hfield" material="groundplane" contype="1" conaffinity="1" priority="1" friction="1.0"/>
+    <geom name="floor" type="hfield" hfield="hfield" material="groundplane" contype="1" conaffinity="1" priority="1" friction="2.0 0.1 0.01"/>
   </worldbody>
 
   <keyframe>

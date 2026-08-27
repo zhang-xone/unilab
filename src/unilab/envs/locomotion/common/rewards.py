@@ -52,6 +52,11 @@ class RewardContext:
     joint_range: np.ndarray | None = None  # (num_action, 2) — [lower, upper]
     linvel_yaw: np.ndarray | None = None  # (N, 3) — base linvel in yaw frame
 
+    # ── jump reward params ────────────────────────────────────────
+    jump_launch_height: float = 0.42
+    jump_crouch_height: float = 0.16
+    flight_height_target: float = 0.65
+
 
 # ── tracking rewards ─────────────────────────────────────────────────
 
@@ -345,12 +350,14 @@ def run_reward_dispatch(
     ctrl_dt: float,
     log_every_n_steps: int = 4,
     only_positive: bool = False,
+    clip_range: float = 0.0,
 ) -> np.ndarray:
     """Standard ``scales × fns(ctx)`` reduction shared by all locomotion envs.
 
     - Writes per-reward means into ``info["log"]`` when ``enable_log`` and the
       ``steps[0]`` cadence matches ``log_every_n_steps``.
     - Returns ``reward * ctrl_dt`` (with optional positive clamp).
+    - clip_range > 0 时，每个 reward term 的 raw * scale 被裁剪到 [-clip_range, clip_range]。
     """
     dtype = get_global_dtype()
     reward = np.zeros((ctx.num_envs,), dtype=dtype)
@@ -363,6 +370,8 @@ def run_reward_dispatch(
             continue
         rew = fns[name](ctx)
         weighted_rew = rew * scale
+        if clip_range > 0:
+            weighted_rew = np.clip(weighted_rew, -clip_range, clip_range)
         reward += weighted_rew
         if should_log:
             log[f"reward/{name}"] = float(np.mean(weighted_rew))

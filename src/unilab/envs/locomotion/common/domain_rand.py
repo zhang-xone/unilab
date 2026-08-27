@@ -32,6 +32,17 @@ class DomainRandConfig:
     kp_multiplier_range: list[float] = field(default_factory=lambda: [0.8, 1.2])
     kd_multiplier_range: list[float] = field(default_factory=lambda: [0.8, 1.2])
 
+    randomize_vmc_theta_kp: bool = False
+    randomize_vmc_theta_kd: bool = False
+    randomize_vmc_l0_kp: bool = False
+    randomize_vmc_l0_kd: bool = False
+    vmc_kp_multiplier_range: list[float] = field(default_factory=lambda: [0.6, 1.4])
+    vmc_kd_multiplier_range: list[float] = field(default_factory=lambda: [0.6, 1.4])
+    randomize_vmc_ff: bool = False
+    vmc_ff_multiplier_range: list[float] = field(default_factory=lambda: [0.6, 1.4])
+    randomize_wheel_kd: bool = False
+    wheel_kd_multiplier_range: list[float] = field(default_factory=lambda: [0.6, 1.4])
+
     randomize_motor_torque: bool = False
     torque_scale_range: list[float] = field(default_factory=lambda: [0.7, 1.0])
 
@@ -40,6 +51,9 @@ class DomainRandConfig:
 
     randomize_inertia: bool = False
     inertia_multiplier_range: list[float] = field(default_factory=lambda: [0.8, 1.2])
+
+    randomize_default_dof_pos: bool = False
+    randomize_default_dof_pos_range: list[float] = field(default_factory=lambda: [-0.05, 0.05])
 
     push_robots: bool = False
     # 静态 push_interval（旧配置方式，保持兼容）

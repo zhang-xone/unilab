@@ -1252,16 +1252,23 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         return np.asarray(delta, dtype=get_global_dtype())
 
     def _reward_wheel_slip(self, ctx: RewardContext) -> np.ndarray:
-        """轮子空转/打滑惩罚：
-        轮子转了但机体没动（或方向反了）→ 惩罚
-        slip = |wheel_vel_avg − vx|
-        0.2 m/s 差 → 惩罚 0.63；0.4 m/s 差 → 惩罚 0.98
+        """轮子空转/打滑惩罚：按左右轮分别计算，考虑差速转向。
+
+        左轮期望线速度 = vx - 0.5*ω*L
+        右轮期望线速度 = vx + 0.5*ω*L
         """
-        wheel_vel = ctx.info["wheel_vel_avg"]
+        rw_vel = ctx.info["rw_vel"]
+        lw_vel = ctx.info["lw_vel"]
         vx = ctx.info["body_vx"]
-        sigma = 0.1   # (m/s)²：0.2 m/s 差时惩罚 ≈ 0.63
-        slip_sq = np.square(wheel_vel*0.06 - vx)
-        return 1.0 - np.exp(-slip_sq / sigma)
+        wyaw = ctx.gyro[:, 2]
+        L = 0.380
+
+        expected_left = vx - 0.5 * wyaw * L
+        expected_right = vx + 0.5 * wyaw * L
+
+        slip_left = np.square(lw_vel * 0.06 - expected_left)
+        slip_right = np.square(rw_vel * 0.06 - expected_right)
+        return (slip_left + slip_right) * 0.5
 
     def _reward_body_accel_tracking(self, ctx: RewardContext) -> np.ndarray:
         """世界坐标系下的加速度跟踪奖励（带方向对齐的摆腿门控）。
@@ -1465,25 +1472,10 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         self._populate_info(state.info, sensors, tilt, body_vertex_z, terminated, rw_theta, lw_theta, kin)
 
         rc = self._cfg.reward_config
-        touch_mask = (body_vertex_z < -0.025) | (sensors["base_pos"][:, 2] < 0.27) | (tilt > rc.tilt_limit)
-        if np.any(touch_mask):
-            orig_commands = state.info["commands"]
-            reward_commands = orig_commands.copy()
-            blend = np.clip(1.0 / (1.0 + np.exp(-(body_vertex_z + 0.008) / 0.02)), 0.0, 1.0)
-            actual_vx = sensors["world_linvel"][:, 0]
-            target_vx = reward_commands[touch_mask, 0]
-            reward_commands[touch_mask, 0] = blend[touch_mask] * target_vx + (1.0 - blend[touch_mask]) * actual_vx[touch_mask]
-            state.info["commands"] = reward_commands
-            reward = self._compute_reward(
-                state.info, sensors["world_linvel"], sensors["gyro"], sensors["upvector"],
-                sensors["dof_pos"], sensors["dof_vel"], sensors["base_pos"], self._num_envs,
-            )
-            state.info["commands"] = orig_commands
-        else:
-            reward = self._compute_reward(
-                state.info, sensors["world_linvel"], sensors["gyro"], sensors["upvector"],
-                sensors["dof_pos"], sensors["dof_vel"], sensors["base_pos"], self._num_envs,
-            )
+        reward = self._compute_reward(
+            state.info, sensors["world_linvel"], sensors["gyro"], sensors["upvector"],
+            sensors["dof_pos"], sensors["dof_vel"], sensors["base_pos"], self._num_envs,
+        )
 
         self._prev_body_vx = sensors["local_linvel"][:, 0].copy()
         self._accumulate_curriculum_stats(state.info, sensors["local_linvel"], commands)

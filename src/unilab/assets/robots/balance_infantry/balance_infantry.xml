@@ -3,7 +3,7 @@
   <default>
     <geom contype="1" conaffinity="1"/>
     <default class="wheel">
-      <geom solref="0.015 1" solimp="0.92 0.97 0.002 0.5 2" friction="0.85 0.01 0.002" margin="0"/>
+      <geom solref="0.015 1" solimp="0.92 0.97 0.002 0.5 2" friction="3.0 0.01 0.01" margin="0"/>
     </default>
   </default>
   <compiler angle="radian" meshdir="assets"/>
@@ -30,7 +30,7 @@
       <joint name="floating_base" type="free" />
       <site name="base_link_site" pos="0 0 0" size="0.01"/>
       <geom type="mesh" rgba="0.86667 0.9098 1 1" mesh="base_link" contype="0" conaffinity="0"/>
-      <geom name="base_box" type="box" size="0.28 0.14 0.10" pos="0 0 0.10" rgba="0.75 0.75 0.75 0.5" contype="0" conaffinity="0"/>
+      <geom name="base_box" type="box" size="0.28 0.14 0.10" pos="0 0 0.10" rgba="0.75 0.75 0.75 0.5" contype="1" conaffinity="1"/>
       <camera name="front_camera" mode="track" fovy="90.0" quat="4.329780281177467e-17 4.329780281177467e-17 0.7071067811865476 0.7071067811865476" pos="0.0 2.0 0.5" />
       <camera name="side_camera" mode="track" fovy="90.0" quat="-0.5 -0.5 0.5000000000000001 0.5000000000000001" pos="-2.0 0.0 0.5" />
 
@@ -38,28 +38,28 @@
         <inertial pos="0.023585 -0.016637 -0.009230" mass="0.227" diaginertia="0.00016518 0.00045635 0.00041886" />
         <joint name="left_front_joint" pos="0 0 0" axis="0 1 0" damping="0.01" armature="0.01" frictionloss="0.02" range="-1.57 2.40"/>
         <geom type="mesh" rgba="0.86667 0.9098 1 1" mesh="left_front_link" contype="0" conaffinity="0"/>
-        <geom type="capsule" fromto="0.011175 0.000000 -0.004373 0.081948 0.000000 -0.032071" size="0.025" contype="2" conaffinity="7" rgba="0.5 0.5 0.5 0.2"/>
+        <geom type="capsule" name="left_front_leg_geom" fromto="0.011175 0.000000 -0.004373 0.081948 0.000000 -0.032071" size="0.025" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
 
         <body name="left_front_child1_link" pos="0.093123 0 -0.036444">
           <inertial pos="-0.042364 -0.015359 -0.038854" mass="0.0465" diaginertia="4.113e-05 8.651e-05 4.835e-05" />
           <joint name="left_front_child1_joint" pos="0 0 0" axis="0 1 0" damping="0.01" armature="0.01" frictionloss="0.01"/>
           <geom type="mesh" rgba="0.86667 0.9098 1 1" mesh="left_front_child1_link" contype="0" conaffinity="0"/>
-          <geom type="capsule" fromto="0 0 0 -0.087068 0 -0.079852" size="0.02" contype="8" conaffinity="8" rgba="0.5 0.5 0.5 0.2"/>
+          <geom type="capsule" name="left_front_child1_leg_geom" fromto="0 0 0 -0.087068 0 -0.079852" size="0.02" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
 
           <body name="left_front_child2_link" pos="-0.087068 0 -0.079852">
             <inertial pos="-0.069932 -0.005180 0.058102" mass="0.1485" diaginertia="0.00030051 0.00066299 0.00036954" />
             <joint name="left_front_child2_joint" pos="0 0 0" axis="0 1 0" damping="0.01" armature="0.01" frictionloss="0.01"/>
             <site name="left_front_site1" pos="-0.09489 0 0.070378" size="0.005" rgba="1 0 0 1"/>
             <geom type="mesh" rgba="0.86667 0.9098 1 1" mesh="left_front_child2_link" contype="0" conaffinity="0"/>
-            <geom type="capsule" fromto="0 0 0 -0.09489 0 0.070378" size="0.018" contype="1" conaffinity="7" rgba="0.5 0.5 0.5 0.2"/>
-            <geom type="capsule" fromto="-0.09489 0 0.070378 -0.12795 0 0.120448" size="0.018" contype="1" conaffinity="7" rgba="0.5 0.5 0.5 0.2"/>
+            <geom type="capsule" name="left_front_leg_geom1" fromto="0 0 0 -0.09489 0 0.070378" size="0.018" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
+            <geom type="capsule" name="left_front_leg_geom2" fromto="-0.09489 0 0.070378 -0.12795 0 0.120448" size="0.018" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
 
             <body name="left_front_child3_link" pos="-0.12795 0 0.120448">
               <inertial pos="-0.042373 -0.018034 -0.021902" mass="0.0435" diaginertia="1.881e-05 7.667e-05 6.129e-05" />
               <joint name="left_front_child3_joint" pos="0 0 0" axis="0 1 0" damping="0.01" armature="0.01" frictionloss="0.01"/>
               <site name="left_front_site2" pos="-0.10216 0.003 -0.052806" size="0.005" rgba="1 0 0 1"/>
               <geom type="mesh" rgba="0.86667 0.9098 1 1" mesh="left_front_child3_link" contype="0" conaffinity="0"/>
-              <geom type="capsule" fromto="0 0 0 -0.10216 0.003 -0.052806" size="0.015" contype="8" conaffinity="8" rgba="0.5 0.5 0.5 0.2"/>
+              <geom type="capsule" name="left_front_child3_leg_geom" fromto="0 0 0 -0.10216 0.003 -0.052806" size="0.015" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
             </body>
           </body>
         </body>
@@ -70,22 +70,22 @@
         <joint name="left_rear_joint" pos="0 0 0" axis="0 1 0" damping="0.01" armature="0.01" frictionloss="0.02" range="-1.57 1.57"/>
         <site name="left_rear_site1" pos="-0.088834 0 -0.045918" size="0.005" rgba="1 1 0 1"/>
         <geom type="mesh" rgba="0.86667 0.9098 1 1" mesh="left_rear_link" contype="0" conaffinity="0"/>
-        <geom type="capsule" fromto="0 0 0 -0.088834 0 -0.045918" size="0.025" contype="8" conaffinity="8" rgba="0.5 0.5 0.5 0.2"/>
-        <geom type="capsule" fromto="-0.088834 0 -0.045918 -0.190994 0.003 -0.098723" size="0.025" contype="8" conaffinity="8" rgba="0.5 0.5 0.5 0.2"/>
+        <geom type="capsule" name="left_rear_leg_geom1" fromto="0 0 0 -0.088834 0 -0.045918" size="0.025" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
+        <geom type="capsule" name="left_rear_leg_geom2" fromto="-0.088834 0 -0.045918 -0.190994 0.003 -0.098723" size="0.025" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
 
         <body name="left_rear_child1_link" pos="-0.190994 0.003 -0.098723">
           <inertial pos="0.106699 -0.003770 -0.077113" mass="0.576" diaginertia="0.00245785 0.00619541 0.00386024" />
           <joint name="left_rear_child1_joint" pos="0 0 0" axis="0 1 0" damping="0.01" armature="0.01" frictionloss="0.01"/>
           <site name="left_rear_site2" pos="-0.033061 0 0.050070" size="0.005" rgba="1 1 0 1"/>
           <geom type="mesh" rgba="0.86667 0.9098 1 1" mesh="left_rear_child1_link" contype="0" conaffinity="0"/>
-          <geom type="capsule" fromto="0 0 0 -0.033061 0 0.050070" size="0.02" contype="4" conaffinity="7" rgba="0.5 0.5 0.5 0.2"/>
-          <geom type="capsule" fromto="0 0 0 0.204012 0 -0.151312" size="0.02" contype="4" conaffinity="7" rgba="0.5 0.5 0.5 0.2"/>
+          <geom type="capsule" name="left_rear_child1_leg_geom1" fromto="0 0 0 -0.033061 0 0.050070" size="0.02" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
+          <geom type="capsule" name="left_rear_child1_leg_geom2" fromto="0 0 0 0.204012 0 -0.151312" size="0.02" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
 
           <body name="left_wheel_link" pos="0.204012 0 -0.151312">
             <inertial pos="0 0.01855 0" mass="0.235752" diaginertia="0.000370164 0.000719335 0.000370164" />
             <joint name="left_wheel_joint" pos="0 0 0" axis="0 1 0" damping="0.01" armature="0.01" frictionloss="0.05"/>
             <geom type="mesh" rgba="0.86667 0.9098 1 1" mesh="left_wheel_link" contype="0" conaffinity="0"/>
-            <geom class="wheel" type="cylinder" fromto="0 0 0 0 0.03 0" size="0.06" rgba="0 0 1 0.5" contype="7" conaffinity="3" condim="6"/>
+            <geom name="left_wheel_geom" class="wheel" type="cylinder" fromto="0 0 0 0 0.03 0" size="0.06" rgba="0 0 1 0.5" contype="7" conaffinity="3" condim="6"/>
           </body>
         </body>
       </body>
@@ -94,28 +94,28 @@
         <inertial pos="0.023585 0.016637 -0.009230" mass="0.227" diaginertia="0.00016518 0.00045635 0.00041886" />
         <joint name="right_front_joint" pos="0 0 0" axis="0 1 0" damping="0.01" armature="0.01" frictionloss="0.02" range="-1.57 2.40"/>
         <geom type="mesh" rgba="0.86667 0.9098 1 1" mesh="right_front_link" contype="0" conaffinity="0"/>
-        <geom type="capsule" fromto="0 0 0 0.093123 0 -0.036444" size="0.025" contype="2" conaffinity="7" rgba="0.5 0.5 0.5 0.2"/>
+        <geom type="capsule" name="right_front_leg_geom" fromto="0 0 0 0.093123 0 -0.036444" size="0.025" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
 
         <body name="right_front_child1_link" pos="0.093123 0 -0.036444">
           <inertial pos="-0.042364 0.015359 -0.038854" mass="0.0465" diaginertia="4.113e-05 8.651e-05 4.835e-05" />
           <joint name="right_front_child1_joint" pos="0 0 0" axis="0 1 0" damping="0.01" armature="0.01" frictionloss="0.01"/>
           <geom type="mesh" rgba="0.86667 0.9098 1 1" mesh="right_front_child1_link" contype="0" conaffinity="0"/>
-          <geom type="capsule" fromto="0 0 0 -0.087068 0 -0.079852" size="0.02" contype="8" conaffinity="8" rgba="0.5 0.5 0.5 0.2"/>
+          <geom type="capsule" name="right_front_child1_leg_geom" fromto="0 0 0 -0.087068 0 -0.079852" size="0.02" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
 
           <body name="right_front_child2_link" pos="-0.087068 0 -0.079852">
             <inertial pos="-0.069932 0.005180 0.058102" mass="0.1485" diaginertia="0.00030051 0.00066299 0.00036954" />
             <joint name="right_front_child2_joint" pos="0 0 0" axis="0 1 0" damping="0.01" armature="0.01" frictionloss="0.01"/>
             <site name="right_front_site1" pos="-0.09489 0 0.070378" size="0.005" rgba="1 0 0 1"/>
             <geom type="mesh" rgba="0.86667 0.9098 1 1" mesh="right_front_child2_link" contype="0" conaffinity="0"/>
-            <geom type="capsule" fromto="0 0 0 -0.09489 0 0.070378" size="0.018" contype="1" conaffinity="7" rgba="0.5 0.5 0.5 0.2"/>
-            <geom type="capsule" fromto="-0.09489 0 0.070378 -0.12795 0 0.120448" size="0.018" contype="1" conaffinity="7" rgba="0.5 0.5 0.5 0.2"/>
+            <geom type="capsule" name="right_front_leg_geom1" fromto="0 0 0 -0.09489 0 0.070378" size="0.018" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
+            <geom type="capsule" name="right_front_leg_geom2" fromto="-0.09489 0 0.070378 -0.12795 0 0.120448" size="0.018" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
 
             <body name="right_front_child3_link" pos="-0.12795 0 0.120448">
               <inertial pos="-0.042373 0.018034 -0.021902" mass="0.0435" diaginertia="1.881e-05 7.667e-05 6.129e-05" />
               <joint name="right_front_child3_joint" pos="0 0 0" axis="0 1 0" damping="0.01" armature="0.01" frictionloss="0.01"/>
               <site name="right_front_site2" pos="-0.10216 -0.003 -0.052806" size="0.005" rgba="1 0 0 1"/>
               <geom type="mesh" rgba="0.86667 0.9098 1 1" mesh="right_front_child3_link" contype="0" conaffinity="0"/>
-              <geom type="capsule" fromto="0 0 0 -0.10216 -0.003 -0.052806" size="0.015" contype="8" conaffinity="8" rgba="0.5 0.5 0.5 0.2"/>
+              <geom type="capsule" name="right_front_child3_leg_geom" fromto="0 0 0 -0.10216 -0.003 -0.052806" size="0.015" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
             </body>
           </body>
         </body>
@@ -126,22 +126,22 @@
         <joint name="right_rear_joint" pos="0 0 0" axis="0 1 0" damping="0.01" armature="0.01" frictionloss="0.02" range="-1.57 1.57"/>
         <site name="right_rear_site1" pos="-0.088834 0 -0.045918" size="0.005" rgba="1 1 0 1"/>
         <geom type="mesh" rgba="0.86667 0.9098 1 1" mesh="right_rear_link" contype="0" conaffinity="0"/>
-        <geom type="capsule" fromto="0 0 0 -0.088834 0 -0.045918" size="0.025" contype="8" conaffinity="8" rgba="0.5 0.5 0.5 0.2"/>
-        <geom type="capsule" fromto="-0.088834 0 -0.045918 -0.190994 -0.003 -0.098723" size="0.025" contype="8" conaffinity="8" rgba="0.5 0.5 0.5 0.2"/>
+        <geom type="capsule" name="right_rear_leg_geom1" fromto="0 0 0 -0.088834 0 -0.045918" size="0.025" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
+        <geom type="capsule" name="right_rear_leg_geom2" fromto="-0.088834 0 -0.045918 -0.190994 -0.003 -0.098723" size="0.025" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
 
         <body name="right_rear_child1_link" pos="-0.190994 -0.003 -0.098723">
           <inertial pos="0.106699 0.003770 -0.077113" mass="0.576" diaginertia="0.00245785 0.00619541 0.00386024" />
           <joint name="right_rear_child1_joint" pos="0 0 0" axis="0 1 0" damping="0.01" armature="0.01" frictionloss="0.01"/>
           <site name="right_rear_site2" pos="-0.033061 0 0.050070" size="0.005" rgba="1 1 0 1"/>
           <geom type="mesh" rgba="0.86667 0.9098 1 1" mesh="right_rear_child1_link" contype="0" conaffinity="0"/>
-          <geom type="capsule" fromto="0 0 0 -0.033061 0 0.050070" size="0.02" contype="4" conaffinity="7" rgba="0.5 0.5 0.5 0.2"/>
-          <geom type="capsule" fromto="0 0 0 0.204012 0 -0.151312" size="0.02" contype="4" conaffinity="7" rgba="0.5 0.5 0.5 0.2"/>
+          <geom type="capsule" name="right_rear_child1_leg_geom1" fromto="0 0 0 -0.033061 0 0.050070" size="0.02" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
+          <geom type="capsule" name="right_rear_child1_leg_geom2" fromto="0 0 0 0.204012 0 -0.151312" size="0.02" contype="1" conaffinity="1" rgba="0.5 0.5 0.5 0.2"/>
 
           <body name="right_wheel_link" pos="0.204012 0 -0.151312">
             <inertial pos="0 -0.01855 0" mass="0.235752" diaginertia="0.000370164 0.000719335 0.000370164" />
             <joint name="right_wheel_joint" pos="0 0 0" axis="0 1 0" damping="0.01" armature="0.01" frictionloss="0.05"/>
             <geom type="mesh" rgba="0.86667 0.9098 1 1" mesh="right_wheel_link" contype="0" conaffinity="0"/>
-            <geom class="wheel" type="cylinder" fromto="0 0 0 0 -0.03 0" size="0.06" rgba="1 0 0 0.5" contype="7" conaffinity="3" condim="6"/>
+            <geom name="right_wheel_geom" class="wheel" type="cylinder" fromto="0 0 0 0 -0.03 0" size="0.06" rgba="1 0 0 0.5" contype="7" conaffinity="3" condim="6"/>
           </body>
         </body>
       </body>
@@ -149,18 +149,18 @@
   </worldbody>
 
   <equality>
-    <connect name="left_loop1" site1="left_front_site1" site2="left_rear_site1" solref="0.001 1" solimp="0.99 0.99 0.01 0.5 2"/>
-    <connect name="left_loop2" site1="left_front_site2" site2="left_rear_site2" solref="0.001 1" solimp="0.99 0.99 0.01 0.5 2"/>
-    <connect name="right_loop1" site1="right_front_site1" site2="right_rear_site1" solref="0.001 1" solimp="0.99 0.99 0.01 0.5 2"/>
-    <connect name="right_loop2" site1="right_front_site2" site2="right_rear_site2" solref="0.001 1" solimp="0.99 0.99 0.01 0.5 2"/>
+    <connect name="left_loop1" site1="left_front_site1" site2="left_rear_site1" solref="0.0001 1" solimp="0.99 0.99 0.001 0.5 2"/>
+    <connect name="left_loop2" site1="left_front_site2" site2="left_rear_site2" solref="0.0001 1" solimp="0.99 0.99 0.001 0.5 2"/>
+    <connect name="right_loop1" site1="right_front_site1" site2="right_rear_site1" solref="0.0001 1" solimp="0.99 0.99 0.001 0.5 2"/>
+    <connect name="right_loop2" site1="right_front_site2" site2="right_rear_site2" solref="0.0001 1" solimp="0.99 0.99 0.001 0.5 2"/>
   </equality>
 
   <actuator>
     <general name="left_front_joint_actuator" joint="left_front_joint" gainprm="1" ctrlrange="-40 40" forcerange="-40.0 40.0"/>
-    <general name="left_rear_joint_actuator" joint="left_rear_joint" gainprm="1" ctrlrange="-40 40" forcerange="-40.0 40.0"/>
-    <general name="left_wheel_joint_actuator" joint="left_wheel_joint" gainprm="1" ctrlrange="-4 4" forcerange="-10.0 10.0"/>
     <general name="right_front_joint_actuator" joint="right_front_joint" gainprm="1" ctrlrange="-40 40" forcerange="-40.0 40.0"/>
+    <general name="left_rear_joint_actuator" joint="left_rear_joint" gainprm="1" ctrlrange="-40 40" forcerange="-40.0 40.0"/>
     <general name="right_rear_joint_actuator" joint="right_rear_joint" gainprm="1" ctrlrange="-40 40" forcerange="-40.0 40.0"/>
+    <general name="left_wheel_joint_actuator" joint="left_wheel_joint" gainprm="1" ctrlrange="-4 4" forcerange="-10.0 10.0"/>
     <general name="right_wheel_joint_actuator" joint="right_wheel_joint" gainprm="1" ctrlrange="-4 4" forcerange="-10.0 10.0"/>
   </actuator>
 
@@ -173,7 +173,23 @@
     <framepos name="right_wheel_pos" objtype="body" objname="right_wheel_link" reftype="body" refname="base_link"/>
     <framepos name="left_wheel_pos" objtype="body" objname="left_wheel_link" reftype="body" refname="base_link"/>
 
-    <touch name="base_body_touch" site="base_link_site"/>
+    <contact name="base_body_contact_force" geom1="base_box" geom2="floor" data="force" num="4" reduce="netforce"/>
+    <contact name="left_wheel_contact_force" geom1="left_wheel_geom" geom2="floor" data="force" num="1" reduce="netforce"/>
+    <contact name="right_wheel_contact_force" geom1="right_wheel_geom" geom2="floor" data="force" num="1" reduce="netforce"/>
+    <contact name="left_front_leg_contact_force" geom1="left_front_leg_geom" geom2="floor" data="force" num="1" reduce="netforce"/>
+    <contact name="left_front_child1_leg_contact_force" geom1="left_front_child1_leg_geom" geom2="floor" data="force" num="1" reduce="netforce"/>
+    <contact name="left_front_leg1_contact_force" geom1="left_front_leg_geom1" geom2="floor" data="force" num="1" reduce="netforce"/>
+    <contact name="left_rear_child1_leg2_contact_force" geom1="left_rear_child1_leg_geom2" geom2="floor" data="force" num="1" reduce="netforce"/>
+    <contact name="left_rear_leg_contact_force" geom1="left_rear_leg_geom1" geom2="floor" data="force" num="1" reduce="netforce"/>
+    <contact name="left_rear_leg2_contact_force" geom1="left_rear_leg_geom2" geom2="floor" data="force" num="1" reduce="netforce"/>
+    <contact name="left_rear_child1_leg1_contact_force" geom1="left_rear_child1_leg_geom1" geom2="floor" data="force" num="1" reduce="netforce"/>
+    <contact name="right_front_leg_contact_force" geom1="right_front_leg_geom" geom2="floor" data="force" num="1" reduce="netforce"/>
+    <contact name="right_front_child1_leg_contact_force" geom1="right_front_child1_leg_geom" geom2="floor" data="force" num="1" reduce="netforce"/>
+    <contact name="right_front_leg1_contact_force" geom1="right_front_leg_geom1" geom2="floor" data="force" num="1" reduce="netforce"/>
+    <contact name="right_rear_child1_leg2_contact_force" geom1="right_rear_child1_leg_geom2" geom2="floor" data="force" num="1" reduce="netforce"/>
+    <contact name="right_rear_leg_contact_force" geom1="right_rear_leg_geom1" geom2="floor" data="force" num="1" reduce="netforce"/>
+    <contact name="right_rear_leg2_contact_force" geom1="right_rear_leg_geom2" geom2="floor" data="force" num="1" reduce="netforce"/>
+    <contact name="right_rear_child1_leg1_contact_force" geom1="right_rear_child1_leg_geom1" geom2="floor" data="force" num="1" reduce="netforce"/>
 
     <jointpos name="left_front_joint_pos" joint="left_front_joint"/>
     <jointpos name="left_rear_joint_pos" joint="left_rear_joint"/>
@@ -189,4 +205,27 @@
     <jointvel name="right_rear_joint_vel" joint="right_rear_joint"/>
     <jointvel name="right_wheel_joint_vel" joint="right_wheel_joint"/>
   </sensor>
+
+  <contact>
+    <exclude body1="base_link" body2="left_front_link"/>
+    <exclude body1="left_front_link" body2="left_front_child1_link"/>
+    <exclude body1="left_front_child1_link" body2="left_front_child2_link"/>
+    <exclude body1="left_front_child2_link" body2="left_front_child3_link"/>
+    <exclude body1="base_link" body2="left_rear_link"/>
+    <exclude body1="left_rear_link" body2="left_rear_child1_link"/>
+    <exclude body1="left_rear_child1_link" body2="left_wheel_link"/>
+    <exclude body1="base_link" body2="right_front_link"/>
+    <exclude body1="right_front_link" body2="right_front_child1_link"/>
+    <exclude body1="right_front_child1_link" body2="right_front_child2_link"/>
+    <exclude body1="right_front_child2_link" body2="right_front_child3_link"/>
+    <exclude body1="base_link" body2="right_rear_link"/>
+    <exclude body1="right_rear_link" body2="right_rear_child1_link"/>
+    <exclude body1="right_rear_child1_link" body2="right_wheel_link"/>
+    <exclude body1="left_front_child2_link" body2="left_rear_link"/>
+    <exclude body1="left_front_child3_link" body2="left_rear_child1_link"/>
+    <exclude body1="right_front_child2_link" body2="right_rear_link"/>
+    <exclude body1="right_front_child3_link" body2="right_rear_child1_link"/>
+    <exclude body1="left_front_link" body2="left_rear_link"/>
+    <exclude body1="right_front_link" body2="right_rear_link"/>
+  </contact>
 </mujoco>

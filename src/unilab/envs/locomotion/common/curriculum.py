@@ -53,14 +53,8 @@ class CurriculumManager:
         self._curriculum_height_good_accum = 0.0
         self._curriculum_height_episode_count = 0
 
-        # ── 高度 sigma curriculum ──
-        rc = self._cfg.reward_config
-        self._base_height_sigma = np.full(num_envs, float(rc.base_height_sigma), dtype=dtype)
-        self._height_err_accum = 0.0
-        self._height_err_count = 0
-        self._sigma_step_counter = 0
-
         # ── 跟踪 sigma curriculum ──
+        rc = self._cfg.reward_config
         self._tracking_sigma_ang_base = float(rc.tracking_sigma_ang)
         self._tracking_sigma_yaw_base = float(rc.tracking_sigma_yaw)
         self._tracking_sigma_ang = self._tracking_sigma_ang_base
@@ -85,10 +79,6 @@ class CurriculumManager:
     @property
     def jump_curriculum_enabled(self) -> bool:
         return self._jump_curriculum_enabled
-
-    @property
-    def base_height_sigma(self) -> np.ndarray:
-        return self._base_height_sigma
 
     @property
     def tracking_sigma_ang(self) -> float:
@@ -119,7 +109,6 @@ class CurriculumManager:
     def step(self, step_counter: int) -> None:
         self._update_scale(step_counter)
         self._try_eval(step_counter)
-        self._update_height_sigma()
         self._update_tracking_sigmas()
 
     def on_reset(
@@ -145,10 +134,6 @@ class CurriculumManager:
             episode_swing_err_sum,
             episode_height_err_sum,
         )
-
-    def accumulate_height_error(self, err_sum: float, err_count: int) -> None:
-        self._height_err_accum += err_sum
-        self._height_err_count += err_count
 
     # =================================================================
     # 内部方法
@@ -292,24 +277,6 @@ class CurriculumManager:
                     self._jump_curriculum_enabled = True
             self._curriculum_height_good_accum = 0.0
             self._curriculum_height_episode_count = 0
-
-    def _update_height_sigma(self) -> None:
-        rc = self._cfg.reward_config
-        sigma_min = float(getattr(rc, "base_height_sigma_min", 0.03))
-        k = float(getattr(rc, "height_sigma_error_multiplier", 1.0))
-        interval = int(getattr(rc, "height_sigma_update_interval", 720))
-
-        self._sigma_step_counter += 1
-        if self._sigma_step_counter < interval or self._height_err_count == 0:
-            return
-
-        mean_err = self._height_err_accum / self._height_err_count
-        sigma = np.maximum(mean_err * k, sigma_min)
-        self._base_height_sigma[:] = sigma
-
-        self._sigma_step_counter = 0
-        self._height_err_accum = 0.0
-        self._height_err_count = 0
 
     def _update_tracking_sigmas(self) -> None:
         ratio = float(self._cmd_yaw_range[1]) / max(self._init_yaw_range, 1e-6)

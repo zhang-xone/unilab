@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import sys
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -202,17 +203,20 @@ class RslRlPlaybackSession:
         self.num_envs = int(num_envs)
         self.obs: Any | None = None
         self.step_count = 0
+        self._lock = threading.Lock()
 
     def reset(self) -> Any:
-        self.obs, _info = self.wrapped_env.reset()
-        self.step_count = 0
-        return self.obs
+        with self._lock:
+            self.obs, _info = self.wrapped_env.reset()
+            self.step_count = 0
+            return self.obs
 
     def step_once(self) -> Any:
-        actions = self._build_actions()
-        self.obs, _reward, _done, _info = self.wrapped_env.step(actions)
-        self.step_count += 1
-        return self.obs
+        with self._lock:
+            actions = self._build_actions()
+            self.obs, _reward, _done, _info = self.wrapped_env.step(actions)
+            self.step_count += 1
+            return self.obs
 
     def advance(self, controls: PlaybackControls) -> bool:
         if not controls.consume_step_permission():
@@ -221,7 +225,8 @@ class RslRlPlaybackSession:
         return True
 
     def physics_state(self) -> np.ndarray:
-        return self.env.get_physics_state_snapshot()
+        with self._lock:
+            return self.env.get_physics_state_snapshot()
 
     @property
     def info(self) -> dict[str, Any]:
@@ -274,27 +279,30 @@ class OffPolicyPlaybackSession:
         self.obs: np.ndarray | None = None
         self.current_priv_info: np.ndarray | None = None
         self.step_count = 0
+        self._lock = threading.Lock()
 
     def reset(self) -> np.ndarray:
-        if self.env.state is None:
-            self.env.init_state()
-        env_indices = np.arange(self.num_envs, dtype=np.int32)
-        reset_result = self.env.reset(env_indices)
-        if not isinstance(reset_result, tuple) or len(reset_result) != 2:
-            raise ValueError(f"Unexpected env.reset return format: {type(reset_result)!r}")
-        obs_out, info_out = reset_result
-        self.obs = np.asarray(self.obs_extractor(obs_out), dtype=np.float32)
-        self.current_priv_info = self._resolve_priv_info(obs_out, info_out)
-        self.step_count = 0
-        return self.obs
+        with self._lock:
+            if self.env.state is None:
+                self.env.init_state()
+            env_indices = np.arange(self.num_envs, dtype=np.int32)
+            reset_result = self.env.reset(env_indices)
+            if not isinstance(reset_result, tuple) or len(reset_result) != 2:
+                raise ValueError(f"Unexpected env.reset return format: {type(reset_result)!r}")
+            obs_out, info_out = reset_result
+            self.obs = np.asarray(self.obs_extractor(obs_out), dtype=np.float32)
+            self.current_priv_info = self._resolve_priv_info(obs_out, info_out)
+            self.step_count = 0
+            return self.obs
 
     def step_once(self) -> np.ndarray:
-        actions = self._build_actions()
-        state = self.env.step(actions)
-        self.obs = np.asarray(self.obs_extractor(state.obs), dtype=np.float32)
-        self.current_priv_info = self._resolve_priv_info(state.obs, state.info)
-        self.step_count += 1
-        return self.obs
+        with self._lock:
+            actions = self._build_actions()
+            state = self.env.step(actions)
+            self.obs = np.asarray(self.obs_extractor(state.obs), dtype=np.float32)
+            self.current_priv_info = self._resolve_priv_info(state.obs, state.info)
+            self.step_count += 1
+            return self.obs
 
     def advance(self, controls: PlaybackControls) -> bool:
         if not controls.consume_step_permission():
@@ -303,7 +311,8 @@ class OffPolicyPlaybackSession:
         return True
 
     def physics_state(self) -> np.ndarray:
-        return self.env.get_physics_state_snapshot()
+        with self._lock:
+            return self.env.get_physics_state_snapshot()
 
     @property
     def info(self) -> dict[str, Any]:

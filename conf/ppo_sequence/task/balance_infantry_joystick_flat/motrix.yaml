@@ -1,0 +1,18 @@
+# @package _global_
+# Balance Infantry Joystick Flat — Motrix variant.
+# Inherits the mujoco training config and switches to motrix backend.
+defaults:
+  - /task/balance_infantry_joystick_flat/mujoco
+  - _self_
+
+training:
+  sim_backend: motrix
+
+env:
+  sim_dt: 0.002
+  motrix_max_iterations: 10
+  domain_rand:
+    randomize_kp: false
+    randomize_kd: false
+    randomize_inertia: false
+    push_robots: false

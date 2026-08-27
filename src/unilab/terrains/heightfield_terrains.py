@@ -638,3 +638,77 @@ class HfFlatTerrainCfg(SubTerrainCfg):
             flat_patch_sampling=self.flat_patch_sampling,
             rng=rng,
         )
+
+
+@dataclass(kw_only=True)
+class HfPlateauTerrainCfg(SubTerrainCfg):
+    """中央高台地形：平坦的高台 + 四周地面，训练机器人从高台边缘下落保持稳定。
+
+    高台是矩形平面，边缘为陡峭落差（非斜坡），四周为平坦地面。
+    """
+
+    platform_height_range: tuple[float, float] = (0.05, 0.45)
+    """高台高度范围 (米)，由 difficulty 插值。"""
+    platform_width: float = 3.0
+    """高台平台边长 (米)。"""
+    border_width: float = 0.5
+    """高台外平坦地面宽度 (米)。"""
+    horizontal_scale: float = 0.1
+    vertical_scale: float = 0.005
+    base_thickness_ratio: float = 1.0
+
+    def function(self, difficulty: float, rng: np.random.Generator) -> TerrainOutput:
+        platform_height = (
+            self.platform_height_range[0]
+            + difficulty * (self.platform_height_range[1] - self.platform_height_range[0])
+        )
+
+        width_pixels = int(self.size[0] / self.horizontal_scale)
+        length_pixels = int(self.size[1] / self.horizontal_scale)
+        border_pixels = int(self.border_width / self.horizontal_scale)
+        platform_pixels = int(self.platform_width / self.horizontal_scale)
+
+        noise = np.zeros((width_pixels, length_pixels), dtype=np.int16)
+
+        height_value = int(round(platform_height / self.vertical_scale))
+
+        # 计算高台在网格中的位置 (居中)
+        x_start = (width_pixels - platform_pixels) // 2
+        x_end = x_start + platform_pixels
+        y_start = (length_pixels - platform_pixels) // 2
+        y_end = y_start + platform_pixels
+
+        # 确保高台不超出边界
+        x_start = max(x_start, border_pixels)
+        x_end = min(x_end, width_pixels - border_pixels)
+        y_start = max(y_start, border_pixels)
+        y_end = min(y_end, length_pixels - border_pixels)
+
+        noise[x_start:x_end, y_start:y_end] = height_value
+
+        terrain_hfield = _build_heightfield(
+            noise,
+            size=self.size,
+            horizontal_scale=self.horizontal_scale,
+            vertical_scale=self.vertical_scale,
+            base_thickness_ratio=self.base_thickness_ratio,
+            z_offset_fn=lambda max_h: 0.0,
+        )
+
+        origin = np.array([
+            self.size[0] / 2,
+            self.size[1] / 2,
+            terrain_hfield.max_physical_height,
+        ])
+
+        return _make_terrain_output(
+            noise,
+            size=self.size,
+            horizontal_scale=self.horizontal_scale,
+            vertical_scale=self.vertical_scale,
+            base_thickness_ratio=self.base_thickness_ratio,
+            origin=origin,
+            flat_patch_sampling=self.flat_patch_sampling,
+            rng=rng,
+            z_offset_fn=lambda max_h: 0.0,
+        )
