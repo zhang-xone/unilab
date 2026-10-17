@@ -17,7 +17,7 @@
     <material name="rmuc_floor_mat" rgba="0.45 0.45 0.5 1.0"/>
     <material name="rmuc_building_mat" rgba="0.7 0.65 0.55 1.0"/>
 
-    <hfield name="rmuc_hfield" file="RMUC2026/heightmap_rect_590x330.png" size="14.725 8.225 1.8 0.001"/>
+    <hfield name="rmuc_hfield" file="RMUC2026/heightmap_rect_2048x1146.png" size="14.725 8.225 1.8 0.001"/>
 
     <mesh name="rmuc_floor" file="RMUC2026/RMUC20261-floor.obj"/>
     <mesh name="rmuc_building" file="RMUC2026/RMUC20261-building_vis.obj"/>
@@ -32,6 +32,6 @@
   </worldbody>
 
   <keyframe>
-    <key name="home" qpos="5.084 8.025 0.800000 1.000000 0.000000 0.000000 0.000000 0.239130 -0.520634 0.284200 -0.486861 -0.519644 0.563946 -0.874393 0.162861 -0.480007 0.287870 -0.455611 -0.497974 0.507563 0.334914" />
+    <key name="home" qpos="5.084 8.025 0.800000 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0" />
   </keyframe>
 </mujoco>

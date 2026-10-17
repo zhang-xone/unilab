@@ -267,7 +267,7 @@ class PPO:
                     latent_batch = self.actor_critic.encode(obs_history_batch)
                     vel_scale = 3.0  # normalize velocity to ~[-1, 1]
                     vel_est_loss = (
-                        (latent_batch[:, :3] - critic_obs_batch[:, :3] / vel_scale).pow(2).mean()
+                        (latent_batch[:, :3] - critic_obs_batch[:, 20:23] / vel_scale).pow(2).mean()
                     )
                     if self.actor_critic.latent_dim > 3:
                         obs_denoise_loss = (
@@ -290,7 +290,7 @@ class PPO:
                 mean_extra_loss += extra_loss.item()
                 with torch.no_grad():
                     for i, name in enumerate(["vx", "vy", "vz"]):
-                        axis_mse = (latent_batch[:, i] * vel_scale - critic_obs_batch[:, i]).pow(2).mean().item()
+                        axis_mse = (latent_batch[:, i] * vel_scale - critic_obs_batch[:, 20 + i]).pow(2).mean().item()
                         extra_metrics.setdefault(f"encoder_rmse_{name}", []).append(axis_mse ** 0.5)
                 num_updates_extra += 1
 

@@ -33,23 +33,23 @@ algo:
 env:
   obs_vel: true
   scene:
-    #model_file: src/unilab/assets/robots/balance_infantry/scene_rmuc.xml
+    model_file: src/unilab/assets/robots/balance_infantry/scene_rmuc.xml
     #model_file: src/unilab/assets/robots/balance_infantry/scene_crawl_slope.xml
     #model_file: src/unilab/assets/robots/balance_infantry/balance_infantry.xml
     #model_file: src/unilab/assets/robots/balance_infantry/scene_flat.xml
-    terrain:
-      generator:
-        curriculum: true
-        size: [8.0, 8.0]
-        num_rows: 6
-        num_cols: 6
-        border_width: 1.0
-        add_lights: true
-        horizontal_scale: 0.1
-      hfield_name: terrain_hfield
-      geom_name: floor
-    #terrain: ~
-    #fragment_files: []
+    #terrain:
+    #  generator:
+    #    curriculum: true
+    #    size: [8.0, 8.0]
+    #    num_rows: 6
+    #    num_cols: 6
+    #    border_width: 1.0
+    #    add_lights: true
+    #    horizontal_scale: 0.1
+    #  hfield_name: terrain_hfield
+    #  geom_name: floor
+    terrain: ~
+    fragment_files: []
   terrain_scan:
     enabled: true
     measured_points_x: [-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
@@ -60,6 +60,10 @@ env:
     promote_frac: 0.3
     demote_frac: 0.1
     spawn_height_margin: 0.05
+    curriculum_mode: "tracking"
+    tracking_reward_demote_threshold: 0.1
+    type_curriculum_enabled: false
+    type_curriculum_switch_interval: 200
   debug_enabled: true
   sim_dt: 0.002
   ctrl_dt: 0.02
@@ -153,6 +157,7 @@ reward:
     base_height_precise: 1.0
     base_height_pbrs: 25
     leg_length: 1.0
+    leg_length_rate: -0.3
     wheel_target: 0.4
     tracking_lin_vel: 1.6
     tracking_ang_vel: 0.5
@@ -248,3 +253,5 @@ reward:
   min_height_loose: 0.14         # 后期高度终止线（m），宽松
   swing_angle_limit_loose: 1.571  # 90° in rad，后期摆角上限，课程结束几乎不触发
   air_spawn_max_height: 0.40    # 空中出生最大高度（m），随 curriculum 从 0 渐进
+  vel_track_ratio_threshold: 0.3  # 速度跟踪比例阈值：|vx| / |cmd_vx| < 此值 → 进入终止计数
+  vel_track_min_cmd: 0.2          # 只有 |cmd_vx| > 此值时才检查速度跟踪终止

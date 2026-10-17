@@ -36,17 +36,17 @@ from test_vmc_lqr import (
 # ═══════════════════════════════════════════════════════════════
 # PD 参数 (与 base.py 一致)
 # ═══════════════════════════════════════════════════════════════
-LEG_KP = (100.0, 100.0, 100.0, 100.0)
-LEG_KD = (5.0, 5.0, 5.0, 5.0)
-WHEEL_KD = (2.0, 2.0)
+LEG_KP = (50.0, 50.0, 50.0, 50.0)
+LEG_KD = (3.2, 3.2, 3.2, 3.2)
+WHEEL_KD = (0.1, 0.1)
 ACTION_SCALE_JOINT = 0.5
-ACTION_SCALE_WHEEL = 10.0
+ACTION_SCALE_WHEEL = 50.0
 JOINT_LIMITS = np.array([
     [-1.57, 2.40], [-1.57, 2.40], [-1.57, 1.57], [-1.57, 1.57],
     [-np.inf, np.inf], [-np.inf, np.inf],
 ], dtype=np.float64)
 
-DEFAULT_DOF_POS = np.array([0.0, 0.0, -0.6, -0.6, 0.0, 0.0], dtype=np.float64)
+DEFAULT_DOF_POS = np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
 
 
 def raw_action_to_torque(raw_action, dof_pos, dof_vel, default_dof_pos):
@@ -86,7 +86,7 @@ def pd_target_to_torque(pd_target, dof_pos, dof_vel):
 
 
 def build_observation_raw(model, data, dof_pos, dof_vel, last_actions, cmd_vel, cmd_yaw_rate, cmd_height):
-    """构建与 RL 一致的 33 维观测."""
+    """构建与 RL 一致的 32 维观测."""
     gyro = data.qvel[3:6].copy()
 
     qw, qx, qy, qz = data.qpos[3:7]
@@ -100,7 +100,7 @@ def build_observation_raw(model, data, dof_pos, dof_vel, last_actions, cmd_vel, 
     pitch = np.arcsin(np.clip(gravity_body[0], -1.0, 1.0))
     roll = np.arcsin(np.clip(-gravity_body[1], -1.0, 1.0))
 
-    commands = np.array([cmd_vel, cmd_yaw_rate, cmd_height, 0.0])
+    commands = np.array([cmd_vel, cmd_yaw_rate, cmd_height])
     yaw = np.arctan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
     yaw_error = 0.0
 
@@ -343,7 +343,7 @@ def main():
                 pitch, pitch_dot, base_vx, dt, lqr_state, prev_lqr,
                 cmd_vel[0], step_count[0],
             )
-            raw_action = tau
+            raw_action = np.array(tau)
 
         # ── 力矩 → 执行 ──
         for i in range(6):
@@ -377,12 +377,16 @@ def main():
             print(f"  {'⏸ 暂停' if paused[0] else '▶ 继续'}")
         elif keycode == 265:    # ↑
             cmd_vel[0] += step
+            print(f"  cmd_vel={cmd_vel[0]:.2f}, cmd_yaw={cmd_yaw_rate[0]:.2f}")
         elif keycode == 264:    # ↓
             cmd_vel[0] -= step
+            print(f"  cmd_vel={cmd_vel[0]:.2f}, cmd_yaw={cmd_yaw_rate[0]:.2f}")
         elif keycode == 263:    # ←
             cmd_yaw_rate[0] += 0.2
+            print(f"  cmd_vel={cmd_vel[0]:.2f}, cmd_yaw={cmd_yaw_rate[0]:.2f}")
         elif keycode == 262:    # →
             cmd_yaw_rate[0] -= 0.2
+            print(f"  cmd_vel={cmd_vel[0]:.2f}, cmd_yaw={cmd_yaw_rate[0]:.2f}")
         elif keycode == 72:     # H
             cmd_vel[0] = 0.0
             cmd_yaw_rate[0] = 0.0

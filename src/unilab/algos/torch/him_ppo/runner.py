@@ -124,6 +124,9 @@ class HIMOnPolicyRunner:
 
         for it in range(start_iter, tot_iter):
             infos: dict[str, Any] = {}
+            # terrain type curriculum
+            if hasattr(self.env, "set_terrain_iteration"):
+                self.env.set_terrain_iteration(it)
             # ── Rollout collection ───────────────────────────────────────────
             with torch.inference_mode():
                 for _ in range(self.num_steps_per_env):

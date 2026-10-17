@@ -38,6 +38,8 @@ class RewardContext:
     tracking_sigma_lin: float | None = None
     tracking_sigma_ang: float | None = None
     tracking_sigma_yaw: float | None = None
+    tracking_sigma_dynamic: bool = True
+    wheel_power_limit: float | None = None
     base_height_target: np.ndarray = field(default_factory=lambda: np.empty(0))  # per-env
     base_height: np.ndarray = field(default_factory=lambda: np.empty(0))  # pre-fetched
 
@@ -351,13 +353,18 @@ def run_reward_dispatch(
     log_every_n_steps: int = 4,
     only_positive: bool = False,
     clip_range: float = 0.0,
+    clip_ranges: Mapping[str, float] | None = None,
 ) -> np.ndarray:
     """Standard ``scales × fns(ctx)`` reduction shared by all locomotion envs.
 
     - Writes per-reward means into ``info["log"]`` when ``enable_log`` and the
       ``steps[0]`` cadence matches ``log_every_n_steps``.
     - Returns ``reward * ctrl_dt`` (with optional positive clamp).
-    - clip_range > 0 时，每个 reward term 的 raw * scale 被裁剪到 [-clip_range, clip_range]。
+    - clip_range > 0 时，未在 clip_ranges 中指定的 reward term 的 raw * scale
+      被裁剪到 [-clip_range, clip_range]（全局兜底）。
+    - clip_ranges 不为 None 时，按 reward 名称独立裁剪：
+      clip_ranges[name] 指定该项的对称裁剪上限 [-v, v]。
+      clip_ranges 中的项优先于 clip_range。
     """
     dtype = get_global_dtype()
     reward = np.zeros((ctx.num_envs,), dtype=dtype)
@@ -370,7 +377,10 @@ def run_reward_dispatch(
             continue
         rew = fns[name](ctx)
         weighted_rew = rew * scale
-        if clip_range > 0:
+        item_clip = (clip_ranges or {}).get(name, None)
+        if item_clip is not None and item_clip > 0:
+            weighted_rew = np.clip(weighted_rew, -item_clip, item_clip)
+        elif clip_range > 0:
             weighted_rew = np.clip(weighted_rew, -clip_range, clip_range)
         reward += weighted_rew
         if should_log:

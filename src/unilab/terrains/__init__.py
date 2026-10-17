@@ -10,6 +10,10 @@ from unilab.terrains.config import (
     ALL_TERRAIN_PRESETS,
     ROUGH_TERRAINS_CFG,
     STAIRS_TERRAINS_CFG,
+    box_plateau,
+    box_pyramid_stairs,
+    box_pyramid_stairs_inv,
+    box_wave,
     flat,
     hf_pyramid_slope,
     hf_pyramid_slope_inv,
@@ -21,6 +25,10 @@ from unilab.terrains.config import (
     wave_terrain,
 )
 from unilab.terrains.heightfield_terrains import (
+    BoxInvertedPyramidStairsTerrainCfg,
+    BoxPlateauTerrainCfg,
+    BoxPyramidStairsTerrainCfg,
+    BoxWaveTerrainCfg,
     HfFlatTerrainCfg,
     HfInvertedPyramidStairsTerrainCfg,
     HfPlateauTerrainCfg,
@@ -30,6 +38,8 @@ from unilab.terrains.heightfield_terrains import (
     HfWaveTerrainCfg,
 )
 from unilab.terrains.terrain_generator import (
+    BoxGeomSpec,
+    CombinedSurfaceSampler,
     FlatPatchSamplingCfg,
     GeneratedTerrain,
     SubTerrainCfg,
@@ -41,6 +51,12 @@ from unilab.terrains.terrain_generator import (
 
 __all__ = [
     "ALL_TERRAIN_PRESETS",
+    "BoxGeomSpec",
+    "BoxInvertedPyramidStairsTerrainCfg",
+    "BoxPlateauTerrainCfg",
+    "BoxPyramidStairsTerrainCfg",
+    "BoxWaveTerrainCfg",
+    "CombinedSurfaceSampler",
     "FlatPatchSamplingCfg",
     "GeneratedTerrain",
     "HfFlatTerrainCfg",
@@ -57,6 +73,10 @@ __all__ = [
     "TerrainGeneratorCfg",
     "TerrainHeightField",
     "TerrainOutput",
+    "box_plateau",
+    "box_pyramid_stairs",
+    "box_pyramid_stairs_inv",
+    "box_wave",
     "flat",
     "hf_pyramid_slope",
     "hf_pyramid_slope_inv",

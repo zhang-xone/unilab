@@ -125,8 +125,8 @@ def compute_vmc_torques_full(vmc_state):
 ACTION_SCALE_JOINT = 0.5
 ACTION_SCALE_WHEEL = 10.0
 CTRL_DT = 0.02
-SIM_DT = 0.002
-SIM_SUBSTEPS = 10
+SIM_DT = 0.005
+SIM_SUBSTEPS = 4
 
 # ============================================================
 # 五连杆正运动学

@@ -1,0 +1,8 @@
+# @package _global_
+# Balance Infantry Jump Fudan Flat — Motrix variant.
+# Inherits the mujoco training config and switches to motrix backend.
+defaults:
+  - /task/balance_infantry_jump_fudan_flat/mujoco
+
+training:
+  sim_backend: motrix

@@ -18,6 +18,10 @@ from collections.abc import Callable
 from typing import Any, TypeVar
 
 from unilab.terrains.heightfield_terrains import (
+    BoxInvertedPyramidStairsTerrainCfg,
+    BoxPlateauTerrainCfg,
+    BoxPyramidStairsTerrainCfg,
+    BoxWaveTerrainCfg,
     HfFlatTerrainCfg,
     HfInvertedPyramidStairsTerrainCfg,
     HfPlateauTerrainCfg,
@@ -74,6 +78,46 @@ def pyramid_stairs_inv(**overrides: Any) -> HfInvertedPyramidStairsTerrainCfg:
 
 
 @terrain_preset
+def box_pyramid_stairs(**overrides: Any) -> BoxPyramidStairsTerrainCfg:
+    defaults: dict[str, Any] = dict(
+        step_height_range=(0.0, 0.2),
+        step_width=0.3,
+        platform_width=3.0,
+        border_width=1.0,
+        obstacle_per_step=0,
+        obstacle_half_width=0.05,
+        obstacle_half_length_range=(0.10, 0.30),
+        obstacle_height_range=(0.02, 0.06),
+        obstacle_margin=0.12,
+    )
+    defaults.update(overrides)
+    return BoxPyramidStairsTerrainCfg(**defaults)
+
+
+@terrain_preset
+def box_pyramid_stairs_inv(**overrides: Any) -> BoxInvertedPyramidStairsTerrainCfg:
+    defaults: dict[str, Any] = dict(
+        step_height_range=(0.0, 0.2),
+        step_width=0.3,
+        platform_width=3.0,
+        border_width=1.0,
+    )
+    defaults.update(overrides)
+    return BoxInvertedPyramidStairsTerrainCfg(**defaults)
+
+
+@terrain_preset
+def box_plateau(**overrides: Any) -> BoxPlateauTerrainCfg:
+    defaults: dict[str, Any] = dict(
+        platform_height_range=(0.05, 0.45),
+        platform_width=3.0,
+        border_width=0.5,
+    )
+    defaults.update(overrides)
+    return BoxPlateauTerrainCfg(**defaults)
+
+
+@terrain_preset
 def hf_pyramid_slope(**overrides: Any) -> HfPyramidSlopedTerrainCfg:
     defaults: dict[str, Any] = dict(
         slope_range=(0.0, 0.7),
@@ -116,6 +160,21 @@ def wave_terrain(**overrides: Any) -> HfWaveTerrainCfg:
     )
     defaults.update(overrides)
     return HfWaveTerrainCfg(**defaults)
+
+
+@terrain_preset
+def box_wave(**overrides: Any) -> BoxWaveTerrainCfg:
+    defaults: dict[str, Any] = dict(
+        amplitude_range=(0.0, 0.15),
+        num_waves=20,
+        cone_height=0.08,
+        bottom_diameter_min=0.06,
+        bottom_diameter_max=0.16,
+        spacing_max=0.15,
+        border_width=0.25,
+    )
+    defaults.update(overrides)
+    return BoxWaveTerrainCfg(**defaults)
 
 
 @terrain_preset

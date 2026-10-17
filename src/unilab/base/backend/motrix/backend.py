@@ -1,3 +1,4 @@
+import logging
 import os
 import time
 from collections.abc import Sequence
@@ -12,6 +13,9 @@ from unilab.dr.types import (
     RESET_TERM_BASE_MASS,
     RESET_TERM_BODY_IPOS,
     RESET_TERM_BODY_MASS,
+    RESET_TERM_DOF_ARMATURE,
+    RESET_TERM_DOF_DAMPING,
+    RESET_TERM_DOF_FRICTIONLOSS,
     RESET_TERM_GEOM_FRICTION,
     RESET_TERM_GRAVITY,
     RESET_TERM_KD,
@@ -44,6 +48,8 @@ from ..motrix_camera import (
     tracking_camera_lookat,
 )
 from .playback import run_motrix_playback
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 DEFAULT_MOTRIX_MAX_ITERATIONS = 3
@@ -437,6 +443,23 @@ class MotrixBackend(SimBackend):
     def get_body_ipos(self) -> np.ndarray:
         return self._default_body_ipos.copy()
 
+    def get_dof_armature(self) -> np.ndarray:
+        armature = np.zeros(int(self._model.num_dof_vel), dtype=np.float64)
+        for joint in self._model.joints:
+            idx = int(joint.dof_vel_index)
+            armature[idx] = float(joint.armature)
+        return armature
+
+    def get_dof_damping(self) -> np.ndarray:
+        return np.zeros(int(self._model.num_dof_vel), dtype=np.float64)
+
+    def get_dof_frictionloss(self) -> np.ndarray:
+        frictionloss = np.zeros(int(self._model.num_dof_vel), dtype=np.float64)
+        for joint in self._model.joints:
+            idx = int(joint.dof_vel_index)
+            frictionloss[idx] = float(joint.frictionloss)
+        return frictionloss
+
     def get_body_subtree_ids(self, root_body_id: int) -> np.ndarray:
         root_id = int(root_body_id)
         if root_id < 0 or root_id >= int(self._model.num_links):
@@ -505,10 +528,16 @@ class MotrixBackend(SimBackend):
         set_ctrl_ms = (time.perf_counter() - t0) * 1000.0
 
         t0 = time.perf_counter()
-        if nsteps == 1:
-            self._model.step(self._data)
-        else:
-            self._model.step_n(self._data, nsteps)
+        try:
+            if nsteps == 1:
+                self._model.step(self._data)
+            else:
+                self._model.step_n(self._data, nsteps)
+        except BaseException:
+            logger.warning(
+                "Motrix step failed (likely LTL NotPositiveDefinite); "
+                "skipping this step."
+            )
         physics_ms = (time.perf_counter() - t0) * 1000.0
 
         t0 = time.perf_counter()
@@ -538,7 +567,13 @@ class MotrixBackend(SimBackend):
             set_ctrl_ms += (time.perf_counter() - t0) * 1000.0
 
             t0 = time.perf_counter()
-            self._model.step(self._data)
+            try:
+                self._model.step(self._data)
+            except BaseException:
+                logger.warning(
+                    "Motrix step failed (likely LTL NotPositiveDefinite); "
+                    "skipping this substep."
+                )
             physics_ms += (time.perf_counter() - t0) * 1000.0
 
             t0 = time.perf_counter()
@@ -592,7 +627,10 @@ class MotrixBackend(SimBackend):
             RESET_TERM_BASE_COM,
             RESET_TERM_BODY_MASS,
             RESET_TERM_BODY_IPOS,
+            RESET_TERM_DOF_ARMATURE,
+            RESET_TERM_DOF_FRICTIONLOSS,
         }
+        supported_reset_terms.add(RESET_TERM_DOF_DAMPING)  # reported as supported but is a no-op
         if getattr(self, "_supports_position_actuator_gains", False):
             supported_reset_terms.update({RESET_TERM_KP, RESET_TERM_KD})
         if getattr(self, "_supports_geom_friction_override", False):
@@ -1373,6 +1411,34 @@ class MotrixBackend(SimBackend):
             if kd.shape != expected_shape:
                 raise ValueError(f"kd must have shape {expected_shape}, got {kd.shape}")
             self._set_position_actuator_kd_override(data_slice, kd)
+
+        if randomization.dof_armature is not None:
+            dof_armature = np.asarray(randomization.dof_armature, dtype=np.float32)
+            expected_shape = (num_reset, int(self._model.num_dof_vel))
+            if dof_armature.shape != expected_shape:
+                raise ValueError(f"dof_armature must have shape {expected_shape}, got {dof_armature.shape}")
+            for joint in self._model.joints:
+                idx = int(joint.dof_vel_index)
+                joint.set_armature_override(
+                    data_slice,
+                    np.ascontiguousarray(dof_armature[:, idx]),
+                )
+
+        if randomization.dof_frictionloss is not None:
+            dof_frictionloss = np.asarray(randomization.dof_frictionloss, dtype=np.float32)
+            expected_shape = (num_reset, int(self._model.num_dof_vel))
+            if dof_frictionloss.shape != expected_shape:
+                raise ValueError(
+                    f"dof_frictionloss must have shape {expected_shape}, got {dof_frictionloss.shape}"
+                )
+            for joint in self._model.joints:
+                idx = int(joint.dof_vel_index)
+                joint.set_frictionloss_override(
+                    data_slice,
+                    np.ascontiguousarray(dof_frictionloss[:, idx]),
+                )
+
+        # dof_damping is a no-op on Motrix (joints have no damping attribute)
 
     def _set_gravity_override(self, data_slice, gravity: np.ndarray) -> None:
         if not getattr(self, "_supports_gravity_override", False):

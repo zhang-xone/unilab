@@ -22,12 +22,12 @@ import sys
 # 超参数 (与 mujoco.yaml 完全一致)
 # ═══════════════════════════════════════════════════════════════
 OBS_HISTORY_LENGTH = 5
-NUM_OBS = 33
-NUM_ENCODER_OBS = OBS_HISTORY_LENGTH * NUM_OBS   # 165
+NUM_OBS = 32
+NUM_ENCODER_OBS = OBS_HISTORY_LENGTH * NUM_OBS   # 160
 LATENT_DIM = 3
 NUM_ACTIONS = 6
 ENCODER_HIDDEN_DIMS = [128, 64]
-ACTOR_HIDDEN_DIMS = [128, 128]
+ACTOR_HIDDEN_DIMS = [128, 64, 32]
 ACTIVATION = "elu"
 
 
@@ -53,6 +53,10 @@ class LQRActor(nn.Module):
       - self.encoder (Linear → ELU → Linear → ELU → Linear)
       - self.actor   (Linear → ELU → Linear → ELU → Linear)
     结构和初始化方式完全一致。
+    
+    Input dimensions:
+      - encoder: 160 (32 obs × 5 history)
+      - actor:   32 + 3 latent = 35
     """
 
     def __init__(self):
@@ -101,8 +105,8 @@ class LQRActor(nn.Module):
         """前向传播。
 
         Args:
-            obs_history: (batch, 165) 过去5帧观测拼接
-            obs:         (batch, 33)  当前帧观测
+            obs_history: (batch, 160) 过去5帧观测拼接
+            obs:         (batch, 32)  当前帧观测
 
         Returns:
             action: (batch, 6) 预测的 raw action
@@ -124,13 +128,13 @@ def build_sequences(observations, pd_targets, history_length=5):
       - target[t]       = pd_targets[t]
 
     Args:
-        observations: (T, 33) 时序观测
+        observations: (T, 32) 时序观测
         pd_targets:   (T, 6)  目标动作
         history_length: 观测历史长度
 
     Returns:
-        obs_history: (T - history_length + 1, 165)
-        obs:         (T - history_length + 1, 33)
+        obs_history: (T - history_length + 1, 160)
+        obs:         (T - history_length + 1, 32)
         targets:     (T - history_length + 1, 6)
     """
     T = observations.shape[0]
@@ -207,33 +211,31 @@ def main():
 
     # ── 归一化 ──
     # 使用与 joystick.py 一致的手动归一化系数
-    # 观测组成: gyro(3) pitch(1) roll(1) cmd(4) last_act(6) wheel_err(2)
-    #           sin/cos_yaw(2) dof_pos_err(4) dof_vel(6) vmc_θ(2) vmc_L0(2)
+    # 观测组成: gyro(3) pitch(1) roll(1) cmd(3) last_act(6)
+    #           sin/cos_yaw(2) dof_pos_err(4) dof_vel(6) vmc_θ(2) vmc_L0(2) = 30
     obs_mean = np.array([
         0.0, 0.0, 0.0,               # 0-2:  gyro
         0.0,                          # 3:    pitch
         0.0,                          # 4:    roll
-        0.0, 0.0, 0.29, 0.05,        # 5-8:  cmd(vx,vyaw,height,jump)
-        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # 9-14: last_actions
-        0.0, 0.0,                     # 15-16: wheel_pos_err
-        0.0, 0.0,                     # 17-18: sin/cos yaw_error
-        0.0, 0.0, 0.0, 0.0,          # 19-22: dof_pos_err
-        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # 23-28: dof_vel
-        0.3, 0.3,                     # 29-30: vmc_theta
-        0.28, 0.28,                   # 31-32: vmc_L0
+        0.0, 0.0, 0.29,              # 5-7:  cmd(vx,vyaw,height)
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # 8-13: last_actions
+        0.0, 0.0,                     # 14-15: sin/cos yaw_error
+        0.0, 0.0, 0.0, 0.0,          # 16-19: dof_pos_err
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # 20-25: dof_vel
+        0.3, 0.3,                     # 26-27: vmc_theta
+        0.28, 0.28,                   # 28-29: vmc_L0
     ], dtype=np.float32)
     obs_std = np.array([
         1.5, 1.5, 1.5,               # 0-2:  gyro
         0.15,                         # 3:    pitch
         0.10,                         # 4:    roll
-        1.5, 2.0, 0.08, 0.22,        # 5-8:  cmd
-        0.6, 0.6, 0.6, 0.6, 0.6, 0.6,  # 9-14: last_actions
-        0.3, 0.3,                     # 15-16: wheel_pos_err
-        0.6, 0.6,                     # 17-18: sin/cos yaw_error
-        0.3, 0.3, 0.3, 0.3,          # 19-22: dof_pos_err
-        3.0, 3.0, 3.0, 3.0, 3.0, 3.0,  # 23-28: dof_vel
-        0.4, 0.4,                     # 29-30: vmc_theta
-        0.05, 0.05,                   # 31-32: vmc_L0
+        1.5, 2.0, 0.08,              # 5-7:  cmd(vx,vyaw,height)
+        0.6, 0.6, 0.6, 0.6, 0.6, 0.6,  # 8-13: last_actions
+        0.6, 0.6,                     # 14-15: sin/cos yaw_error
+        0.3, 0.3, 0.3, 0.3,          # 16-19: dof_pos_err
+        3.0, 3.0, 3.0, 3.0, 3.0, 3.0,  # 20-25: dof_vel
+        0.4, 0.4,                     # 26-27: vmc_theta
+        0.05, 0.05,                   # 28-29: vmc_L0
     ], dtype=np.float32)
     obs_std = np.where(obs_std < 1e-6, 1.0, obs_std)
     # 编码器归一化: 5 帧 obs 拼接

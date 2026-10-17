@@ -121,6 +121,9 @@ class OnPolicyRunner:
         for it in range(self.current_learning_iteration, tot_iter):
             self.current_learning_iteration = it
             start = time.time()
+            # terrain type curriculum
+            if hasattr(self.env, "set_terrain_iteration"):
+                self.env.set_terrain_iteration(it)
             # Rollout
             with torch.inference_mode():
                 for i in range(self.num_steps_per_env):    ###############这里
@@ -311,7 +314,24 @@ class OnPolicyRunner:
 
     def load(self, path, load_optimizer=True):
         loaded_dict = torch.load(path)
-        missing, unexpected = self.alg.actor_critic.load_state_dict(loaded_dict["model_state_dict"], strict=False)
+        model_dict = loaded_dict["model_state_dict"]
+
+        for key in list(model_dict.keys()):
+            if key.startswith("encoder_obs_normalizer."):
+                old = model_dict[key]
+                if old.shape[-1] == 165:
+                    old_reshaped = old.reshape(1, 5, 33)
+                    model_dict[key] = old_reshaped.mean(dim=1)
+                    print(f"[LOAD] Converted {key}: {old.shape} -> {model_dict[key].shape}")
+
+        current_state = self.alg.actor_critic.state_dict()
+        had_mismatch = False
+        for key in list(model_dict.keys()):
+            if key in current_state and model_dict[key].shape != current_state[key].shape:
+                print(f"[LOAD] Mismatched size for {key}: {model_dict[key].shape} vs {current_state[key].shape}, skipping.")
+                del model_dict[key]
+                had_mismatch = True
+        missing, unexpected = self.alg.actor_critic.load_state_dict(model_dict, strict=False)
         if missing:
             print(f"[LOAD] WARNING: missing keys: {missing}")
         if unexpected:
@@ -319,7 +339,10 @@ class OnPolicyRunner:
         if not missing and not unexpected:
             print(f"[LOAD] All keys matched successfully.")
         if load_optimizer:
-            self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
+            if had_mismatch:
+                print("[LOAD] Skipping optimizer load due to model shape mismatch.")
+            else:
+                self.alg.optimizer.load_state_dict(loaded_dict["optimizer_state_dict"])
         self.current_learning_iteration = loaded_dict["iter"]
         return loaded_dict["infos"]
 

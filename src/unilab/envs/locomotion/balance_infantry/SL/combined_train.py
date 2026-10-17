@@ -38,20 +38,14 @@ from test_vmc_lqr import (
 # ═══════════════════════════════════════════════════════════════
 # 参数
 # ═══════════════════════════════════════════════════════════════
-LEG_KP = (100.0, 100.0, 100.0, 100.0)
-LEG_KD = (5.0, 5.0, 5.0, 5.0)
-WHEEL_KD = (2.0, 2.0)
-DEFAULT_DOF_POS = np.array([0.0, 0.0, -0.6, -0.6, 0.0, 0.0], dtype=np.float64)
+LEG_KP = (50.0, 50.0, 50.0, 50.0)
+LEG_KD = (3.2, 3.2, 3.2, 3.2)
+WHEEL_KD = (0.1, 0.1)
+DEFAULT_DOF_POS = np.array([0.0, 0.0, -0.0, -0.0, 0.0, 0.0], dtype=np.float64)
 INIT_Z = 0.50
 
-# 控制频率匹配 PPO: sim_dt=0.002, ctrl_dt=0.02 → decimation=10
-DECIMATION = 10
-
-# wheel_pos_err 跟踪 (与 PPO _update_wheel_pos_err 一致)
-WHEEL_RADIUS = 0.06
-WHEELBASE = 0.380
-WHEEL_ERR_VEL_THRESHOLD = 0.3
-WHEEL_ERR_DECAY_STEPS = 4
+# 控制频率匹配 PPO: sim_dt=0.005, ctrl_dt=0.02 → decimation=4
+DECIMATION = 4
 
 # 观测噪声参数 (与 PPO balance_infantry 实际加噪字段一致)
 NOISE_LEVEL = 1.0
@@ -70,26 +64,9 @@ def _add_obs_noise(val, scale, rng=None):
     return val + noise
 
 
-def _update_wheel_pos_err_single(wheel_pos_err, wheel_err_decay_count, cmd_vx, cmd_wyaw, actual_lw, actual_rw, vx, dt):
-    target_lw = (cmd_vx - 0.5 * cmd_wyaw * WHEELBASE) / WHEEL_RADIUS
-    target_rw = (cmd_vx + 0.5 * cmd_wyaw * WHEELBASE) / WHEEL_RADIUS
-
-    err_dot = np.array([target_lw - actual_lw, target_rw - actual_rw], dtype=np.float32)
-
-    if abs(vx) < WHEEL_ERR_VEL_THRESHOLD:
-        wheel_pos_err[0] += err_dot * dt
-        wheel_err_decay_count[0] = 0
-    else:
-        if wheel_err_decay_count[0] == 0:
-            wheel_err_decay_count[0] = WHEEL_ERR_DECAY_STEPS
-        if wheel_err_decay_count[0] > 0:
-            remain = float(wheel_err_decay_count[0])
-            wheel_pos_err[0] *= (remain - 1.0) / remain
-            wheel_err_decay_count[0] -= 1
-
 # RL 动作空间参数 (与 test_vmc_lqr.py inverse_pd_targets 一致)
 ACTION_SCALE_JOINT = 0.5
-ACTION_SCALE_WHEEL = 10.0
+ACTION_SCALE_WHEEL = 50.0
 JOINT_LIMITS = np.array([
     [-1.57, 2.40],
     [-1.57, 2.40],
@@ -102,27 +79,27 @@ JOINT_LIMITS = np.array([
 # 手动归一化系数 (joystick.py 一致)
 OBS_MEAN = np.array([
     0.0, 0.0, 0.0, 0.0, 0.0,
-    0.0, 0.0, 0.29, 0.05,
+    0.0, 0.0, 0.29,
     0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    0.0, 0.0, 0.0, 0.0,
+    0.0, 1.0,
     0.0, 0.0, 0.0, 0.0,
     0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    0.3, 0.3, 0.28, 0.28,
+    0.0, 0.0, 0.28, 0.28,
 ], dtype=np.float32)
 OBS_STD = np.array([
-    1.5, 1.5, 1.5, 0.15, 0.10,
-    1.5, 2.0, 0.08, 0.22,
+    0.34, 0.62, 2.0, 0.15, 0.10,
+    1.5, 2.0, 0.08,
     0.6, 0.6, 0.6, 0.6, 0.6, 0.6,
-    0.3, 0.3, 0.6, 0.6,
+    0.6, 0.6,
     0.3, 0.3, 0.3, 0.3,
-    3.0, 3.0, 3.0, 3.0, 3.0, 3.0,
+    1.5, 1.5, 1.5, 1.5, 22.0, 22.0,
     0.4, 0.4, 0.05, 0.05,
 ], dtype=np.float32)
 ENC_MEAN = np.tile(OBS_MEAN, OBS_HISTORY_LENGTH).astype(np.float32)
 ENC_STD = np.tile(OBS_STD, OBS_HISTORY_LENGTH).astype(np.float32)
 
 
-def build_observation(model, data, dof_pos, dof_vel, last_actions, cmd_vel, cmd_yaw, cmd_height, wheel_pos_err, yaw_error, noisy=False):
+def build_observation(model, data, dof_pos, dof_vel, last_actions, cmd_vel, cmd_yaw, cmd_height, yaw_error, noisy=False):
     gyro = data.qvel[3:6].copy()
     qw, qx, qy, qz = data.qpos[3:7]
     gx = 2 * (qx * qz - qw * qy)
@@ -130,7 +107,7 @@ def build_observation(model, data, dof_pos, dof_vel, last_actions, cmd_vel, cmd_
     gz = 1 - 2 * (qx * qx + qy * qy)
     pitch = np.arcsin(np.clip(gx, -1.0, 1.0))
     roll = np.arcsin(np.clip(-gy, -1.0, 1.0))
-    commands = np.array([cmd_vel, cmd_yaw, cmd_height, 0.0])
+    commands = np.array([cmd_vel, cmd_yaw, cmd_height])
 
     q_lf, q_rf, q_lr, q_rr = dof_pos[0], dof_pos[1], dof_pos[2], dof_pos[3]
     phi1_l = q_lr + 5 * np.pi / 6
@@ -156,7 +133,6 @@ def build_observation(model, data, dof_pos, dof_vel, last_actions, cmd_vel, cmd_
         np.array([pitch]), np.array([roll]),
         commands,
         last_actions,
-        np.array([wheel_pos_err[0]]), np.array([wheel_pos_err[1]]),
         np.array([np.sin(yaw_error)]), np.array([np.cos(yaw_error)]),
         dof_pos_err, dof_vel,
         np.array([theta_l]), np.array([theta_r]),
@@ -271,7 +247,7 @@ LEG_DEFAULTS = DEFAULT_DOF_POS[:4].astype(np.float32)
 
 
 def train_step_actor(net, optimizer, loss_fn, obs, velocities, step_q, step_qvel, step_lqr, step_vmc, batch_size, device):
-    """训练 actor: obs(33) + 真实速度(3) → 一个 PD 目标, 对 DECIMATION 步分别计算力矩,
+    """训练 actor: obs(32) + 真实速度(3) → 一个 PD 目标, 对 DECIMATION 步分别计算力矩,
     loss = mean_i MSE(PD力矩_i, LQR纯力矩_i)。
     step_q/qvel/lqr/vmc: (N, DECIMATION, 6)
     """
@@ -471,8 +447,6 @@ def main():
     paused = [False]
     use_nn = [False]
     last_actions = [np.zeros(6, dtype=np.float32)]
-    wheel_pos_err = [np.zeros(2, dtype=np.float32)]
-    wheel_err_decay_count = [0]
     obs_history = deque(maxlen=OBS_HISTORY_LENGTH)
     last_loss = [0.0]
     nn_debug_count = [0]  # NN 切换后前几步打印对比
@@ -541,8 +515,6 @@ def main():
         stored_ctrl[0] = None
         stored_nn_pd_target[0] = None
         last_actions[0] = np.zeros(6, dtype=np.float32)
-        wheel_pos_err[0] = np.zeros(2, dtype=np.float32)
-        wheel_err_decay_count[0] = 0
         obs_history.clear()
         step_buffer['q'].clear()
         step_buffer['qvel'].clear()
@@ -614,11 +586,6 @@ def main():
         yaw_dot = d.qvel[5]
         base_vx = d.qvel[0]
 
-        # ── wheel_pos_err 更新 (与 PPO _update_wheel_pos_err 一致) ──
-        _update_wheel_pos_err_single(wheel_pos_err, wheel_err_decay_count,
-                                     params['cmd_vel'], params['cmd_yaw_rate'],
-                                     qvel[4], qvel[5], base_vx, dt)
-
         # ── LQR 500Hz: 每步更新, 使用 sim_dt (保证 LQR 精度最高) ──
         lqr_tau = lqr_control(model, d, q, qvel, L0_l, L0_r, phi0_l, phi0_r,
                               phi2_l, phi3_l, sigma1_l, phi2_r, phi3_r, sigma1_r,
@@ -636,7 +603,7 @@ def main():
         step_buffer['lqr_tau'].append(np.array([tau4_l, tau4_r, tau1_l, tau1_r, wheel_t_l, wheel_t_r], dtype=np.float32))
         step_buffer['vmc_tau'].append(np.array([vmc_tau4_l, vmc_tau4_r, vmc_tau1_l, vmc_tau1_r, 0.0, 0.0], dtype=np.float32))
 
-        # ── PD / NN 50Hz: 每 DECIMATION=10 步更新一次 ──
+        # ── PD / NN 50Hz: 每 DECIMATION=4 步更新一次 ──
         is_ctrl_step = (step_count[0] % DECIMATION == 0)
         if is_ctrl_step:
             ctrl_step[0] += 1
@@ -652,7 +619,6 @@ def main():
                       f"L0_target={params['L0_target']:.3f}  diff_cmd_L0={height_cmd - L0_l:.3f}m")
             obs = build_observation(model, d, q[:4], qvel[:6], last_actions[0],
                                     params['cmd_vel'], params['cmd_yaw_rate'], height_cmd,
-                                    wheel_pos_err[0],
                                     (target_yaw[0] - yaw + np.pi) % (2.0 * np.pi) - np.pi,
                                     noisy=True)
             obs_history.append(obs)

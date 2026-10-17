@@ -16,6 +16,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from unilab.terrains.terrain_generator import (
+    BoxGeomSpec,
+    CylinderGeomSpec,
     SubTerrainCfg,
     TerrainHeightField,
     TerrainOutput,
@@ -91,6 +93,8 @@ def _make_terrain_output(
     flat_patch_sampling: dict | None,
     rng: np.random.Generator,
     z_offset_fn: Callable[[float], float] = lambda max_h: 0.0,
+    box_geoms: list[BoxGeomSpec] | None = None,
+    cylinder_geoms: list[CylinderGeomSpec] | None = None,
 ) -> TerrainOutput:
     terrain_hfield = _build_heightfield(
         noise,
@@ -113,6 +117,8 @@ def _make_terrain_output(
         origin=origin,
         heightfield=terrain_hfield,
         flat_patches=flat_patches,
+        box_geoms=box_geoms,
+        cylinder_geoms=cylinder_geoms,
     )
 
 
@@ -609,6 +615,132 @@ class HfInvertedPyramidStairsTerrainCfg(HfPyramidStairsTerrainCfg):
 
 
 @dataclass(kw_only=True)
+class BoxPyramidStairsTerrainCfg(SubTerrainCfg):
+    """Pyramid stairs terrain using MuJoCo box primitives.
+
+    Hfield is flat (z=0) — only box geoms carry the geometry.  A combined
+    surface sampler (`CombinedSurfaceSampler`) resolves heights by taking
+    max(hfield, box) per sample point, so spawning and height queries stay
+    accurate without hfield stair-edge blur in collision.
+
+    Optional random obstacles can be scattered on the stair surfaces to
+    train robustness for stair descent with unexpected bumps/debris.
+    """
+
+    step_height_range: tuple[float, float]
+    """Min and max step height, in meters. Interpolated by difficulty."""
+    step_width: float
+    """Depth (run) of each step, in meters."""
+    platform_width: float = 1.0
+    """Side length of the flat square platform at the top, in meters."""
+    border_width: float = 0.0
+    """Width of the flat outer border around the staircase, in meters."""
+    horizontal_scale: float = 0.05
+    vertical_scale: float = 0.005
+    base_thickness_ratio: float = 1.0
+    obstacle_per_step: int = 0
+    """Number of random obstacles per visible step ring. 0 = disabled."""
+    obstacle_half_width: float = 0.05
+    """Fixed half-width (travel direction), in meters. Robot must step over this."""
+    obstacle_half_length_range: tuple[float, float] = (0.10, 0.30)
+    """Min and max half-length (along step edge), in meters. Blocks more of the step."""
+    obstacle_height_range: tuple[float, float] = (0.02, 0.06)
+    """Min and max height of obstacle boxes (z), in meters."""
+    obstacle_margin: float = 0.12
+    """Minimum distance from step edges to avoid placing obstacles on boundaries."""
+
+    def function(self, difficulty: float, rng: np.random.Generator) -> TerrainOutput:
+        step_height = self.step_height_range[0] + difficulty * (
+            self.step_height_range[1] - self.step_height_range[0]
+        )
+
+        cell_w, cell_l = self.size
+        W = int(round(cell_w / self.horizontal_scale))
+        L = int(round(cell_l / self.horizontal_scale))
+        step_px = int(round(self.step_width / self.horizontal_scale))
+        plat_px = int(round(self.platform_width / self.horizontal_scale))
+        border_px = int(round(self.border_width / self.horizontal_scale))
+
+        noise = np.zeros((W, L), dtype=np.int16)
+
+        inner = min(W, L) - 2 * border_px
+        n_steps = max(0, (inner - plat_px) // (2 * step_px)) if step_px > 0 else 0
+
+        half_h = step_height / 2
+        step_width_m = self.step_width
+        border_w_m = self.border_width
+        box_geoms: list[BoxGeomSpec] = []
+        for k in range(n_steps):
+            lo = border_w_m + k * step_width_m
+            size_xy = (cell_w - lo * 2) / 2
+            box_geoms.append(BoxGeomSpec(
+                size=(size_xy, size_xy, half_h),
+                pos=(cell_w / 2, cell_l / 2, (k + 1) * step_height - half_h),
+            ))
+        plat_lo = border_w_m + n_steps * step_width_m
+        plat_size_xy = (cell_w - plat_lo * 2) / 2
+        box_geoms.append(BoxGeomSpec(
+            size=(plat_size_xy, plat_size_xy, half_h),
+            pos=(cell_w / 2, cell_l / 2, (n_steps + 1) * step_height - half_h),
+        ))
+
+        # Random obstacles on stair surfaces — per-step allocation
+        if self.obstacle_per_step > 0 and n_steps > 0:
+            for k in range(n_steps):
+                lo = border_w_m + k * step_width_m
+                hi = border_w_m + (k + 1) * step_width_m
+                z_surface = (k + 1) * step_height
+                for _ in range(self.obstacle_per_step):
+                    obs_half_len = rng.uniform(*self.obstacle_half_length_range)
+                    obs_height = rng.uniform(*self.obstacle_height_range)
+                    obs_half_z = obs_height / 2.0
+                    edge = rng.integers(0, 4)
+                    if edge == 0:  # bottom strip
+                        ox = rng.uniform(lo + self.obstacle_margin,
+                                         cell_w - lo - self.obstacle_margin)
+                        oy = rng.uniform(lo + self.obstacle_margin,
+                                         hi - self.obstacle_margin)
+                        size_xy = (obs_half_len, self.obstacle_half_width)
+                    elif edge == 1:  # top strip
+                        ox = rng.uniform(lo + self.obstacle_margin,
+                                         cell_w - lo - self.obstacle_margin)
+                        oy = rng.uniform(cell_l - hi + self.obstacle_margin,
+                                         cell_l - lo - self.obstacle_margin)
+                        size_xy = (obs_half_len, self.obstacle_half_width)
+                    elif edge == 2:  # left strip
+                        ox = rng.uniform(lo + self.obstacle_margin,
+                                         hi - self.obstacle_margin)
+                        oy = rng.uniform(hi + self.obstacle_margin,
+                                         cell_l - hi - self.obstacle_margin)
+                        size_xy = (self.obstacle_half_width, obs_half_len)
+                    else:  # right strip
+                        ox = rng.uniform(cell_w - hi + self.obstacle_margin,
+                                         cell_w - lo - self.obstacle_margin)
+                        oy = rng.uniform(hi + self.obstacle_margin,
+                                         cell_l - hi - self.obstacle_margin)
+                        size_xy = (self.obstacle_half_width, obs_half_len)
+                    box_geoms.append(BoxGeomSpec(
+                        size=(*size_xy, obs_half_z),
+                        pos=(ox, oy, z_surface + obs_half_z),
+                    ))
+
+        spawn_z = (n_steps + 1) * step_height
+        origin = np.array([cell_w / 2, cell_l / 2, spawn_z])
+
+        return _make_terrain_output(
+            noise,
+            size=self.size,
+            horizontal_scale=self.horizontal_scale,
+            vertical_scale=self.vertical_scale,
+            base_thickness_ratio=self.base_thickness_ratio,
+            origin=origin,
+            flat_patch_sampling=self.flat_patch_sampling,
+            rng=rng,
+            box_geoms=box_geoms,
+        )
+
+
+@dataclass(kw_only=True)
 class HfFlatTerrainCfg(SubTerrainCfg):
     """A flat heightfield terrain (all-zero noise array)."""
 
@@ -711,4 +843,238 @@ class HfPlateauTerrainCfg(SubTerrainCfg):
             flat_patch_sampling=self.flat_patch_sampling,
             rng=rng,
             z_offset_fn=lambda max_h: 0.0,
+        )
+
+
+@dataclass(kw_only=True)
+class BoxPlateauTerrainCfg(SubTerrainCfg):
+    """中央高台地形，使用 MuJoCo box 基元。
+
+    Hfield 全平 (z=0)，只有 box geom 承载高台几何体。
+    相比 HfPlateauTerrainCfg，box 边缘精确不模糊，避免从高台边缘
+    踏空时脚穿透斜坡的问题。
+    """
+
+    platform_height_range: tuple[float, float] = (0.05, 0.45)
+    """高台高度范围 (米)，由 difficulty 插值。"""
+    platform_width: float = 3.0
+    """高台平台边长 (米)。"""
+    border_width: float = 0.5
+    """高台外平坦地面宽度 (米)。"""
+    horizontal_scale: float = 0.05
+    vertical_scale: float = 0.005
+    base_thickness_ratio: float = 1.0
+
+    def function(self, difficulty: float, rng: np.random.Generator) -> TerrainOutput:
+        platform_height = (
+            self.platform_height_range[0]
+            + difficulty * (self.platform_height_range[1] - self.platform_height_range[0])
+        )
+
+        cell_w, cell_l = self.size
+        W = int(round(cell_w / self.horizontal_scale))
+        L = int(round(cell_l / self.horizontal_scale))
+
+        noise = np.zeros((W, L), dtype=np.int16)
+
+        half_h = platform_height / 2
+        plat_size_xy = self.platform_width / 2
+        box_geoms: list[BoxGeomSpec] = [
+            BoxGeomSpec(
+                size=(plat_size_xy, plat_size_xy, half_h),
+                pos=(cell_w / 2, cell_l / 2, platform_height - half_h),
+            ),
+        ]
+
+        spawn_z = platform_height
+        origin = np.array([cell_w / 2, cell_l / 2, spawn_z])
+
+        return _make_terrain_output(
+            noise,
+            size=self.size,
+            horizontal_scale=self.horizontal_scale,
+            vertical_scale=self.vertical_scale,
+            base_thickness_ratio=self.base_thickness_ratio,
+            origin=origin,
+            flat_patch_sampling=self.flat_patch_sampling,
+            rng=rng,
+            box_geoms=box_geoms,
+            z_offset_fn=lambda max_h: 0.0,
+        )
+
+
+@dataclass(kw_only=True)
+class BoxInvertedPyramidStairsTerrainCfg(SubTerrainCfg):
+    """倒金字塔台阶地形，使用 MuJoCo box 门框（每层4根方条围成正方形框）。
+
+    Hfield 全平沉到坑底，只有 box 门框承载下沉台阶几何体。
+    从外框到内框逐级下陷，中心平台最深（hf 面）。
+
+    与 HfInvertedPyramidStairsTerrainCfg 的区别：box 边缘精确不模糊，
+    避免高度场锯齿导致的接触约束不稳定。
+
+    """
+
+    step_height_range: tuple[float, float]
+    """Min and max step height, in meters. Interpolated by difficulty."""
+    step_width: float
+    """Depth (run) of each step, also the thickness of each frame bar."""
+    platform_width: float = 1.0
+    """Side length of the flat square hole at the bottom, in meters."""
+    border_width: float = 0.0
+    """Width of the flat outer border around the staircase, in meters."""
+    horizontal_scale: float = 0.05
+    vertical_scale: float = 0.005
+    base_thickness_ratio: float = 1.0
+
+    def function(self, difficulty: float, rng: np.random.Generator) -> TerrainOutput:
+        step_height = self.step_height_range[0] + difficulty * (
+            self.step_height_range[1] - self.step_height_range[0]
+        )
+
+        cell_w, cell_l = self.size
+        W = int(round(cell_w / self.horizontal_scale))
+        L = int(round(cell_l / self.horizontal_scale))
+        step_px = int(round(self.step_width / self.horizontal_scale))
+        plat_px = int(round(self.platform_width / self.horizontal_scale))
+        border_px = int(round(self.border_width / self.horizontal_scale))
+
+        noise = np.zeros((W, L), dtype=np.int16)
+        half_h = step_height / 2
+        step_width_m = self.step_width
+        border_w_m = self.border_width
+
+        inner = min(W, L) - 2 * border_px
+        n_steps = max(0, (inner - plat_px) // (2 * step_px) - 1) if step_px > 0 else 0
+        box_geoms: list[BoxGeomSpec] = []
+
+        for k in range(n_steps + 1):
+            z_center = -(k + 0.5) * step_height
+            s_center = border_w_m + (k + 0.5) * step_width_m
+            bar_half_w = step_width_m / 2
+
+            if k == 0:
+                inner_edge = border_w_m + step_width_m
+                short_half = inner_edge / 2
+                short_center = inner_edge / 2
+                long_extent = cell_w / 2
+            else:
+                short_half = bar_half_w
+                short_center = s_center
+                long_extent = max((cell_w - 2 * s_center) / 2 + bar_half_w, bar_half_w)
+
+            box_geoms.extend([
+                BoxGeomSpec(
+                    size=(long_extent, short_half, half_h),
+                    pos=(cell_w / 2, short_center, z_center),
+                ),
+                BoxGeomSpec(
+                    size=(long_extent, short_half, half_h),
+                    pos=(cell_w / 2, cell_l - short_center, z_center),
+                ),
+                BoxGeomSpec(
+                    size=(short_half, max(long_extent - 2 * short_half, 0.0), half_h),
+                    pos=(short_center, cell_l / 2, z_center),
+                ),
+                BoxGeomSpec(
+                    size=(short_half, max(long_extent - 2 * short_half, 0.0), half_h),
+                    pos=(cell_w - short_center, cell_l / 2, z_center),
+                ),
+            ])
+
+        pit_bottom = -(n_steps + 1) * step_height
+        spawn_z = pit_bottom
+        origin = np.array([cell_w / 2, cell_l / 2, spawn_z])
+
+        return _make_terrain_output(
+            noise,
+            size=self.size,
+            horizontal_scale=self.horizontal_scale,
+            vertical_scale=self.vertical_scale,
+            base_thickness_ratio=self.base_thickness_ratio,
+            origin=origin,
+            flat_patch_sampling=self.flat_patch_sampling,
+            rng=rng,
+            box_geoms=box_geoms,
+            z_offset_fn=lambda max_h: pit_bottom,
+        )
+
+
+@dataclass(kw_only=True)
+class BoxWaveTerrainCfg(SubTerrainCfg):
+    """Wave terrain built with truncated-cone (frustum) cylinder geoms on a flat hfield.
+
+    Truncated cones lie horizontally along the Y axis (walking direction).
+    Diameter and spacing both scale with difficulty: small/dense at easy
+    levels, large/sparse at hard levels.
+    """
+
+    amplitude_range: tuple[float, float] = (0.0, 0.15)
+    """Min and max amplitude of the cosine envelope, in meters. Interpolated by difficulty."""
+    num_waves: int = 20
+    """Number of complete wave cycles along the terrain length."""
+    cone_height: float = 0.08
+    """Height (Z half-length * 2) of each truncated cone, in meters."""
+    bottom_diameter_min: float = 0.06
+    """Bottom diameter at difficulty=0, in meters."""
+    bottom_diameter_max: float = 0.16
+    """Bottom diameter at difficulty=1, in meters."""
+    spacing_min: float | None = None
+    """Ridge spacing at difficulty=0, in meters. Defaults to bottom_diameter_min."""
+    spacing_max: float | None = None
+    """Ridge spacing at difficulty=1, in meters. Defaults to bottom_diameter_max."""
+    border_width: float = 0.25
+    """Width of the flat border around the terrain edges, in meters."""
+    horizontal_scale: float = 0.1
+    vertical_scale: float = 0.005
+    base_thickness_ratio: float = 0.25
+
+    def function(self, difficulty: float, rng: np.random.Generator) -> TerrainOutput:
+
+        cell_w, cell_l = self.size
+        W = int(round(cell_w / self.horizontal_scale))
+        L = int(round(cell_l / self.horizontal_scale))
+        noise = np.zeros((W, L), dtype=np.int16)
+
+        inner_l = cell_l - 2.0 * self.border_width
+        inner_w = cell_w - 2.0 * self.border_width
+        half_len_y = cell_l / 2.0
+
+        bd = self.bottom_diameter_min + difficulty * (self.bottom_diameter_max - self.bottom_diameter_min)
+        td = bd / 2.0
+        br = bd / 2.0
+        tr = td / 2.0
+
+        sp_min = self.spacing_min if self.spacing_min is not None else self.bottom_diameter_min
+        sp_max = self.spacing_max if self.spacing_max is not None else self.bottom_diameter_max
+        spacing = sp_min + difficulty * (sp_max - sp_min)
+
+        quat_y = (0.7071068, 0.7071068, 0.0, 0.0)
+
+        cylinder_geoms: list[CylinderGeomSpec] = []
+        x0 = self.border_width
+        r_bound = cell_w - self.border_width
+        while x0 < r_bound:
+            cx = x0 + br
+            if cx + br > r_bound:
+                break
+            cylinder_geoms.append(CylinderGeomSpec(
+                size=(tr, br, half_len_y),
+                pos=(cx, cell_l / 2.0, 0.0),
+                quat=quat_y,
+            ))
+            x0 += spacing
+
+        origin = np.array([cell_w / 2, cell_l / 2, 0.0])
+
+        return _make_terrain_output(
+            noise,
+            size=self.size,
+            horizontal_scale=self.horizontal_scale,
+            vertical_scale=self.vertical_scale,
+            base_thickness_ratio=self.base_thickness_ratio,
+            origin=origin,
+            flat_patch_sampling=self.flat_patch_sampling,
+            rng=rng,
+            cylinder_geoms=cylinder_geoms,
         )

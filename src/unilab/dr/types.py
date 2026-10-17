@@ -14,7 +14,10 @@ RESET_TERM_BODY_INERTIA = "body_inertia"
 RESET_TERM_BODY_IPOS = "body_ipos"
 RESET_TERM_BODY_MASS = "body_mass"
 RESET_TERM_DOF_ARMATURE = "dof_armature"
+RESET_TERM_DOF_DAMPING = "dof_damping"
+RESET_TERM_DOF_FRICTIONLOSS = "dof_frictionloss"
 RESET_TERM_GEOM_FRICTION = "geom_friction"
+RESET_TERM_GEOM_SOLREF = "geom_solref"
 RESET_TERM_KP = "kp"
 RESET_TERM_KD = "kd"
 
@@ -76,9 +79,20 @@ class DomainRandomizationCapabilities:
             dof_armature=(
                 payload.dof_armature if self.supports_reset_term(RESET_TERM_DOF_ARMATURE) else None
             ),
+            dof_damping=(
+                payload.dof_damping if self.supports_reset_term(RESET_TERM_DOF_DAMPING) else None
+            ),
+            dof_frictionloss=(
+                payload.dof_frictionloss if self.supports_reset_term(RESET_TERM_DOF_FRICTIONLOSS) else None
+            ),
             geom_friction=(
                 payload.geom_friction
                 if self.supports_reset_term(RESET_TERM_GEOM_FRICTION)
+                else None
+            ),
+            geom_solref=(
+                payload.geom_solref
+                if self.supports_reset_term(RESET_TERM_GEOM_SOLREF)
                 else None
             ),
             kp=payload.kp if self.supports_reset_term(RESET_TERM_KP) else None,
@@ -97,7 +111,10 @@ class ResetRandomizationPayload:
     body_ipos: np.ndarray | None = None
     body_mass: np.ndarray | None = None
     dof_armature: np.ndarray | None = None
+    dof_damping: np.ndarray | None = None
+    dof_frictionloss: np.ndarray | None = None
     geom_friction: np.ndarray | None = None
+    geom_solref: np.ndarray | None = None
     kp: np.ndarray | None = None
     kd: np.ndarray | None = None
 
@@ -119,8 +136,14 @@ class ResetRandomizationPayload:
             terms.add(RESET_TERM_BODY_MASS)
         if self.dof_armature is not None:
             terms.add(RESET_TERM_DOF_ARMATURE)
+        if self.dof_damping is not None:
+            terms.add(RESET_TERM_DOF_DAMPING)
+        if self.dof_frictionloss is not None:
+            terms.add(RESET_TERM_DOF_FRICTIONLOSS)
         if self.geom_friction is not None:
             terms.add(RESET_TERM_GEOM_FRICTION)
+        if self.geom_solref is not None:
+            terms.add(RESET_TERM_GEOM_SOLREF)
         if self.kp is not None:
             terms.add(RESET_TERM_KP)
         if self.kd is not None:

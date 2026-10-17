@@ -1,0 +1,7 @@
+cd /home/xxx/ubuntu_software/unilab/UniLab/src/unilab/envs/locomotion/balance_infantry
+
+# gyro / pitch / roll / theta 方向验证
+uv run python test/test_gyro.py
+
+# 阻尼 / 摩擦系数测试 (固定base + 重力 ON)
+uv run python test/test_damping.py

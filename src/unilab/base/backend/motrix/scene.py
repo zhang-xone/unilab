@@ -24,6 +24,89 @@ def _resolve_scene_fragment_path(fragment_file: str, model_file: Path) -> Path:
     return (model_file.parent / path).resolve()
 
 
+# Motrix's default equality-connect spring (k=1e8, d=20000) crudely mirrors
+# MuJoCo's `solref=\"0.0001 1\"`, but Motrix's LTL constraint solver cannot
+# handle such extreme stiffness for closed-chain linkages.  We therefore
+# read the original MuJoCo XML `solref` / `solimp` attributes and convert
+# them to Motrix spring parameters *with a safety cap* on the stiffness.
+#
+# MuJoCo   solref(time_constant, damping_ratio)  →  Motrix spring(k, d)
+#   k ≈ 1 / time_constant²
+#   d ≈ 2 · damping_ratio / time_constant
+#
+# The effective stiffness also depends on the constrained bodies' inertia;
+# using unit effective mass gives a conservative upper bound.
+_MAX_EQ_CONNECT_K: float = 1e4
+_EQ_CONNECT_K_FALLBACK: float = 1e4
+_EQ_CONNECT_D_FALLBACK: float = 500.0
+_EQ_CONNECT_MIN_DAMPING_RATIO: float = 1.0
+
+
+def _parse_connect_sol_params(xml_path: str | Path) -> dict:
+    """Parse <equality><connect> solref / solimp from a MuJoCo XML file.
+
+    Returns {name: (k, d, (d0, dmax, width, middle, power))}.
+    """
+    try:
+        tree = ET.parse(str(xml_path))
+    except ET.ParseError:
+        return {}
+    params: dict = {}
+    default_solref = (0.01, 1.0)
+    default_solimp = (0.99, 0.99, 0.001, 0.5, 2.0)
+    for eq_el in tree.iter("equality"):
+        for el in eq_el:
+            if el.tag != "connect":
+                continue
+            name = el.get("name")
+            if not name:
+                continue
+            try:
+                sr = [float(v) for v in (el.get("solref", "") or "0.01").split()[:2]]
+                si = [float(v) for v in (el.get("solimp", "") or "0.99 0.99 0.001 0.5 2").split()[:5]]
+            except ValueError:
+                sr, si = list(default_solref), list(default_solimp)
+            if len(sr) < 2:
+                sr.append(default_solref[1])
+            if len(si) < 5:
+                si = list(default_solimp)
+            tau, xi = sr[0], sr[1]
+            k = 1.0 / (tau * tau)
+            d = 2.0 * xi / tau
+            params[name] = (k, d, tuple(si[:5]))
+    return params
+
+
+def _soften_equality_constraint_springs(world, xml_path=None) -> None:
+    ecs = getattr(world, "equality_constraint_set", None)
+    if ecs is None:
+        return
+    connect_params = _parse_connect_sol_params(xml_path) if xml_path else {}
+    for ec in ecs.connects:
+        spring = getattr(ec, "spring", None)
+        if spring is None:
+            continue
+        ss = getattr(spring, "spring", None)
+        if ss is None:
+            continue
+        name = getattr(ec, "name", None)
+        if name and name in connect_params:
+            k_raw, d_raw, imp_tuple = connect_params[name]
+        else:
+            k_raw, d_raw = _EQ_CONNECT_K_FALLBACK, _EQ_CONNECT_D_FALLBACK
+            imp_tuple = None
+        k = min(k_raw, _MAX_EQ_CONNECT_K)
+        xi = d_raw / (2.0 * k_raw ** 0.5) if k_raw > 0 else 1.0
+        xi = max(xi, _EQ_CONNECT_MIN_DAMPING_RATIO)
+        d = 2.0 * xi * k ** 0.5
+        ss.k = k
+        ss.d = d
+        if imp_tuple is not None:
+            imp = getattr(spring, "impedance", None)
+            if imp is not None:
+                imp.d0, imp.dmax, imp.width, imp.middle, imp.power = imp_tuple
+
+
 def _extract_keyframes(fragment_file: Path) -> list[ET.Element]:
     """Return ``<keyframe>`` child elements declared inside ``fragment_file``."""
     root = ET.parse(fragment_file).getroot()
@@ -171,6 +254,7 @@ def materialize_motrix_scene(
     robot_path = _materialize_robot_with_fragment_keyframes(model_path, fragment_paths)
     try:
         world = msd.from_file(str(robot_path))
+        _soften_equality_constraint_springs(world, xml_path=robot_path)
         for fragment_path in fragment_paths:
             _attach_motrix_scene_fragment(world, fragment_path)
         if add_body_sensors:
@@ -250,8 +334,32 @@ def materialize_motrix_hfield_attached_scene(
     terrain_geom.hfield = hfield_name
     terrain_geom.position = np.asarray(generated.geom_pos, dtype=np.float32)
     terrain_geom.collision_mask = msd.CollisionMask.collide_with_all()
+    terrain_geom.margin = 0.0
     terrain_geom.physics_material.friction = [1.0, 0.005, 0.0001]
     world.hierarchy.geoms.append(terrain_geom)
+
+    for i, bg in enumerate(generated.box_geoms):
+        box_geom = msd.Geometry()
+        box_geom.name = bg.name if bg.name else f"box_geom_{i}"
+        box_geom.shape = msd.ShapeType.Box
+        box_geom.size = [float(bg.size[0]), float(bg.size[1]), float(bg.size[2])]
+        box_geom.position = np.asarray(bg.pos, dtype=np.float32)
+        box_geom.collision_mask = msd.CollisionMask.collide_with_all()
+        friction = bg.friction if bg.friction else (1.0, 0.005, 0.0001)
+        box_geom.physics_material.friction = [float(friction[0]), float(friction[1]), float(friction[2])]
+        world.hierarchy.geoms.append(box_geom)
+
+    for i, cg in enumerate(generated.cylinder_geoms):
+        cyl_geom = msd.Geometry()
+        cyl_geom.name = cg.name if cg.name else f"cyl_geom_{i}"
+        cyl_geom.shape = msd.ShapeType.Cylinder
+        cyl_geom.size = [float(cg.size[0]), float(cg.size[1]), float(cg.size[2])]
+        cyl_geom.position = np.asarray(cg.pos, dtype=np.float32)
+        cyl_geom.orientation = np.asarray(cg.quat, dtype=np.float32)
+        cyl_geom.collision_mask = msd.CollisionMask.collide_with_all()
+        friction = cg.friction if cg.friction else (1.0, 0.005, 0.0001)
+        cyl_geom.physics_material.friction = [float(friction[0]), float(friction[1]), float(friction[2])]
+        world.hierarchy.geoms.append(cyl_geom)
 
     fragment_paths = [
         _resolve_scene_fragment_path(fragment_file, robot_path) for fragment_file in fragment_files
@@ -259,6 +367,7 @@ def materialize_motrix_hfield_attached_scene(
     merged_robot_path = _materialize_robot_with_fragment_keyframes(robot_path, fragment_paths)
     try:
         robot_world = msd.from_file(str(merged_robot_path))
+        _soften_equality_constraint_springs(robot_world, xml_path=merged_robot_path)
         world.attach(robot_world)
         # TODO(motrixsim): remove this once msd.World.attach carries keyframes.
         world.keyframes.extend(robot_world.keyframes)

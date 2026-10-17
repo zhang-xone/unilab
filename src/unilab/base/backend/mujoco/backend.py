@@ -1,3 +1,4 @@
+import ctypes
 import os
 import tempfile
 import time
@@ -21,7 +22,10 @@ from unilab.dr.types import (
     RESET_TERM_BODY_IQUAT,
     RESET_TERM_BODY_MASS,
     RESET_TERM_DOF_ARMATURE,
+    RESET_TERM_DOF_DAMPING,
+    RESET_TERM_DOF_FRICTIONLOSS,
     RESET_TERM_GEOM_FRICTION,
+    RESET_TERM_GEOM_SOLREF,
     RESET_TERM_GRAVITY,
     RESET_TERM_KD,
     RESET_TERM_KP,
@@ -47,6 +51,33 @@ def _root_state_dims(model) -> tuple[int, int]:
     if model.njnt > 0 and int(model.jnt_type[0]) == int(mujoco.mjtJoint.mjJNT_FREE):
         return 7, 6
     return 0, 0
+
+
+def _sample_solver_stats(
+    model: mujoco.MjModel,
+    physics_state: np.ndarray,
+    num_envs: int,
+    n_sample: int = 32,
+) -> tuple[float, int, float, int, float, int]:
+    """Sample ncon/nefc/niter from uniformly-spaced envs via mj_step on temp mjData."""
+    indices = np.linspace(0, num_envs - 1, min(n_sample, num_envs), dtype=int)
+    nq, nv, na = model.nq, model.nv, model.na
+    ncons, nefcs, niters = [], [], []
+    for i in indices:
+        data = mujoco.MjData(model)
+        data.qpos[:nq] = physics_state[i, :nq]
+        data.qvel[:nv] = physics_state[i, nq:nq + nv]
+        data.act[:na] = physics_state[i, nq + nv:nq + nv + na]
+        mujoco.mj_step(model, data)
+        ncons.append(data.ncon)
+        nefcs.append(data.nefc)
+        niters.append(data.solver_niter)
+    ncons_a = np.array(ncons, dtype=np.float64)
+    nefcs_a = np.array(nefcs, dtype=np.float64)
+    niters_a = np.array(niters, dtype=np.float64)
+    return (float(ncons_a.mean()), int(ncons_a.max()),
+            float(nefcs_a.mean()), int(nefcs_a.max()),
+            float(niters_a.mean()), int(niters_a.max()))
 
 
 @dataclass
@@ -402,6 +433,24 @@ class MuJoCoBackend(SimBackend):
             self._tracked_linvel_b_all = _get_sensor_view("track_linvel_b", 3)
             self._tracked_angvel_b_all = _get_sensor_view("track_angvel_b", 3)
 
+    def _find_mjmodel_ptr_offset(self, field_name: str) -> int:
+        """Find the byte offset of a pointer field in the mjModel C struct.
+
+        Scans the base model's mjModel struct for a pointer whose value
+        matches the address of the field's data array.
+        """
+        ptr = int(self._model._address)
+        field_data = getattr(self._model, field_name)
+        target_addr = field_data.ctypes.data
+
+        ptr_size = ctypes.sizeof(ctypes.c_void_p)
+        for offset in range(0, 20000, ptr_size):
+            addr = ptr + offset
+            candidate = ctypes.cast(ctypes.c_void_p(addr), ctypes.POINTER(ctypes.c_void_p))
+            if candidate.contents.value == target_addr:
+                return offset
+        raise RuntimeError(f"Could not find offset for {field_name} in mjModel struct")
+
     def _load_base_model(self) -> mujoco.MjModel:
         if isinstance(self._model_file, mujoco.MjModel):
             if self.add_body_sensors:
@@ -567,8 +616,9 @@ class MuJoCoBackend(SimBackend):
         return [self._model_variants[int(idx)] for idx in self._model_assignments]
 
     def _build_pool(self) -> BatchEnvPool:
+        model_sequence = self._current_model_sequence()
         pool = BatchEnvPool(
-            self._current_model_sequence(),
+            model_sequence,
             nbatch=self._num_envs,
             nthread=self._n_threads,
         )
@@ -718,6 +768,9 @@ class MuJoCoBackend(SimBackend):
     def get_geom_friction(self) -> np.ndarray:
         return np.asarray(self._model.geom_friction, dtype=np.float64).copy()
 
+    def get_geom_solref(self) -> np.ndarray:
+        return np.asarray(self._model.geom_solref, dtype=np.float64).copy()
+
     def get_gravity(self) -> np.ndarray:
         return np.asarray(self._model.opt.gravity, dtype=np.float64).copy()
 
@@ -729,6 +782,12 @@ class MuJoCoBackend(SimBackend):
 
     def get_dof_armature(self) -> np.ndarray:
         return np.asarray(self._model.dof_armature, dtype=np.float64).copy()
+
+    def get_dof_damping(self) -> np.ndarray:
+        return np.asarray(self._model.dof_damping, dtype=np.float64).copy()
+
+    def get_dof_frictionloss(self) -> np.ndarray:
+        return np.asarray(self._model.dof_frictionloss, dtype=np.float64).copy()
 
     def get_motion_body_ids(self, names: Sequence[str]) -> np.ndarray:
         return self.get_body_ids(names)
@@ -790,7 +849,7 @@ class MuJoCoBackend(SimBackend):
             control_traj = np.concatenate((control_traj, xfrc_traj), axis=-1)
         set_ctrl_ms = (time.perf_counter() - t0) * 1000.0
 
-        t0 = time.perf_counter()
+        t_pool = time.perf_counter()
         state_np, sensor_np = self._pool.step(  # type: ignore[union-attr]
             self._physics_state,
             nstep=nsteps,
@@ -801,16 +860,22 @@ class MuJoCoBackend(SimBackend):
         )
         if control_spec & int(mujoco.mjtState.mjSTATE_XFRC_APPLIED):
             self._pending_xfrc_applied.fill(0.0)
-        self._physics_state[:] = state_np.astype(self._np_dtype)
-        physics_ms = (time.perf_counter() - t0) * 1000.0
+        pool_step_ms = (time.perf_counter() - t_pool) * 1000.0
 
-        t0 = time.perf_counter()
+        t_copy = time.perf_counter()
+        self._physics_state[:] = state_np.astype(self._np_dtype)
+        state_copy_ms = (time.perf_counter() - t_copy) * 1000.0
+        physics_ms = pool_step_ms + state_copy_ms
+
+        t_sensor = time.perf_counter()
         self._sensor_data[:] = sensor_np.astype(self._np_dtype)
-        refresh_cache_ms = (time.perf_counter() - t0) * 1000.0
+        refresh_cache_ms = (time.perf_counter() - t_sensor) * 1000.0
 
         return {
             "timing": {
                 "set_ctrl_ms": set_ctrl_ms,
+                "pool_step_ms": pool_step_ms,
+                "state_copy_ms": state_copy_ms,
                 "physics_ms": physics_ms,
                 "refresh_cache_ms": refresh_cache_ms,
             }
@@ -820,6 +885,8 @@ class MuJoCoBackend(SimBackend):
         self, ctrl: np.ndarray, nsteps: int
     ) -> dict[str, dict[str, float]]:
         set_ctrl_ms = 0.0
+        pool_step_ms = 0.0
+        state_copy_ms = 0.0
         physics_ms = 0.0
         refresh_cache_ms = 0.0
         has_pending_xfrc = bool(np.any(self._pending_xfrc_applied))
@@ -835,7 +902,7 @@ class MuJoCoBackend(SimBackend):
                 control_traj = np.concatenate((control_traj, xfrc_traj), axis=-1)
             set_ctrl_ms += (time.perf_counter() - t0) * 1000.0
 
-            t0 = time.perf_counter()
+            t_pool = time.perf_counter()
             state_np, sensor_np = self._pool.step(  # type: ignore[union-attr]
                 self._physics_state,
                 nstep=1,
@@ -844,19 +911,26 @@ class MuJoCoBackend(SimBackend):
                 return_sensor=True,
                 post_step_forward_sensor=self._post_step_forward_sensor,
             )
-            self._physics_state[:] = state_np.astype(self._np_dtype)
-            physics_ms += (time.perf_counter() - t0) * 1000.0
+            pool_step_ms += (time.perf_counter() - t_pool) * 1000.0
 
-            t0 = time.perf_counter()
+            t_copy = time.perf_counter()
+            self._physics_state[:] = state_np.astype(self._np_dtype)
+            state_copy_ms += (time.perf_counter() - t_copy) * 1000.0
+
+            t_sensor = time.perf_counter()
             self._sensor_data[:] = sensor_np.astype(self._np_dtype)
-            refresh_cache_ms += (time.perf_counter() - t0) * 1000.0
+            refresh_cache_ms += (time.perf_counter() - t_sensor) * 1000.0
 
         if has_pending_xfrc:
             self._pending_xfrc_applied.fill(0.0)
 
+        physics_ms = pool_step_ms + state_copy_ms
+
         return {
             "timing": {
                 "set_ctrl_ms": set_ctrl_ms,
+                "pool_step_ms": pool_step_ms,
+                "state_copy_ms": state_copy_ms,
                 "physics_ms": physics_ms,
                 "refresh_cache_ms": refresh_cache_ms,
             }
@@ -877,14 +951,57 @@ class MuJoCoBackend(SimBackend):
         state_np[:, self._idx_qpos : self._idx_qpos + self.nq] = qpos
         state_np[:, self._idx_qvel : self._idx_qvel + self.nv] = qvel
 
+        translated = self._translate_reset_randomization(randomization, num_reset)
+
+        # dof_damping / dof_frictionloss: pool 不支持, 写 model 后批量 reset(同批次共享随机值)
+        orig_damping = None
+        orig_fricloss = None
+        if randomization is not None and randomization.dof_damping is not None:  # type: ignore[union-attr]
+            orig_damping = self._model.dof_damping.copy()
+            dof_damping_val = self._coerce_reset_field(
+                randomization.dof_damping,  # type: ignore[union-attr]
+                name="dof_damping",
+                num_reset=num_reset,
+                shaped_tail=(self._model.nv,),
+            )
+            self._model.dof_damping[:] = dof_damping_val[0]
+        if randomization is not None and randomization.dof_frictionloss is not None:  # type: ignore[union-attr]
+            orig_fricloss = self._model.dof_frictionloss.copy()
+            dof_fric_val = self._coerce_reset_field(
+                randomization.dof_frictionloss,  # type: ignore[union-attr]
+                name="dof_frictionloss",
+                num_reset=num_reset,
+                shaped_tail=(self._model.nv,),
+            )
+            self._model.dof_frictionloss[:] = dof_fric_val[0]
+
+        orig_geom_solref = None
+        if randomization is not None and randomization.geom_solref is not None:  # type: ignore[union-attr]
+            orig_geom_solref = self._model.geom_solref.copy()
+            geom_solref_val = self._coerce_reset_field(
+                randomization.geom_solref,  # type: ignore[union-attr]
+                name="geom_solref",
+                num_reset=num_reset,
+                shaped_tail=(self._model.ngeom, 2),
+            )
+            self._model.geom_solref[:] = geom_solref_val[0].reshape(self._model.ngeom, 2)
+
         state_out, sensor_np = self._pool.reset(  # type: ignore[union-attr]
             env_ids=np.asarray(env_indices, dtype=np.int32),
             initial_state=state_np,
-            randomization=self._translate_reset_randomization(randomization, num_reset),
+            randomization=translated,
         )
+        sensor_out = sensor_np
+
+        if orig_damping is not None:
+            self._model.dof_damping[:] = orig_damping
+        if orig_fricloss is not None:
+            self._model.dof_frictionloss[:] = orig_fricloss
+        if orig_geom_solref is not None:
+            self._model.geom_solref[:] = orig_geom_solref
 
         self._physics_state[env_indices] = state_out.astype(self._np_dtype)
-        self._sensor_data[env_indices] = sensor_np.astype(self._np_dtype)
+        self._sensor_data[env_indices] = sensor_out.astype(self._np_dtype)
 
     def get_dr_capabilities(self) -> DomainRandomizationCapabilities:
         return DomainRandomizationCapabilities(
@@ -898,7 +1015,10 @@ class MuJoCoBackend(SimBackend):
                     RESET_TERM_BODY_IPOS,
                     RESET_TERM_BODY_MASS,
                     RESET_TERM_DOF_ARMATURE,
+                    RESET_TERM_DOF_DAMPING,
+                    RESET_TERM_DOF_FRICTIONLOSS,
                     RESET_TERM_GEOM_FRICTION,
+                    RESET_TERM_GEOM_SOLREF,
                     RESET_TERM_KP,
                     RESET_TERM_KD,
                 }

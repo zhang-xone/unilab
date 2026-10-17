@@ -24,8 +24,25 @@ class DomainRandConfig:
     randomize_ground_friction: bool = False
     ground_friction_multiplier_range: list[float] = field(default_factory=lambda: [0.8, 1.2])
 
+    randomize_geom_solref: bool = False
+    geom_solref_timeconst_range: list[float] = field(default_factory=lambda: [0.01, 0.05])
+    geom_solref_dampratio_range: list[float] = field(default_factory=lambda: [0.9, 1.1])
+
     randomize_dof_armature: bool = False
     dof_armature_multiplier_range: list[float] = field(default_factory=lambda: [0.8, 1.2])
+
+    randomize_joint_friction: bool = False
+    leg_main_damping_range: list[float] = field(default_factory=lambda: [0.05, 0.2])
+    leg_main_frictionloss_range: list[float] = field(default_factory=lambda: [0.25, 1.0])
+    wheel_damping_range: list[float] = field(default_factory=lambda: [0.0, 0.01])
+    wheel_frictionloss_range: list[float] = field(default_factory=lambda: [0.05, 0.25])
+    passive_damping_range: list[float] = field(default_factory=lambda: [0.01, 0.025])
+    passive_frictionloss_range: list[float] = field(default_factory=lambda: [0.05, 0.1])
+    gimbal_damping_range: list[float] = field(default_factory=lambda: [0.002, 0.01])
+    gimbal_frictionloss_range: list[float] = field(default_factory=lambda: [0.002, 0.01])
+    # 倍数随机 (基于 XML/模型默认值, 0.1~10x)
+    damping_multiplier_range: list[float] = field(default_factory=lambda: [0.1, 10.0])
+    frictionloss_multiplier_range: list[float] = field(default_factory=lambda: [0.1, 10.0])
 
     randomize_kp: bool = False
     randomize_kd: bool = False

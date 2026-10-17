@@ -74,6 +74,10 @@ class UniLabSequenceVecEnv(VecEnv):
     def get_privileged_observations(self) -> torch.Tensor:
         return self._get_priv()
 
+    def set_terrain_iteration(self, iteration: int) -> None:
+        if hasattr(self._env, "set_terrain_iteration"):
+            self._env.set_terrain_iteration(iteration)
+
     def step(
         self, actions: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, dict, torch.Tensor]:

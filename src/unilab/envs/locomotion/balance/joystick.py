@@ -95,6 +95,7 @@ class BalanceRewardConfig:
     """
 
     clip_range: float = 0.0
+    clip_ranges: dict[str, float] = field(default_factory=dict)
 
     scales: dict[str, float] = field(
         default_factory=lambda: {
@@ -171,6 +172,8 @@ class BalanceRewardConfig:
     jump_vz_target: float = 2.0       # 蹬地目标向上速度（m/s）
     jump_vz_sigma: float = 1.0        # 蹬地速度奖励的高斯 σ（m/s）
     jump_curriculum_height_threshold: float = 0.03  # 高度跟踪误差 < 此值时认为收敛，达标后才开启跳跃
+    vel_track_ratio_threshold: float = 0.3  # 速度跟踪比例阈值：|vx_actual| / |cmd_vx| < 此值 → 进入终止计数
+    vel_track_min_cmd: float = 0.2  # 只有 |cmd_vx| > 此值时才检查速度跟踪终止
 
 
 @dataclass(kw_only=True)
@@ -185,6 +188,12 @@ class BalanceRoughTerrainCfg(TerrainGeneratorCfg):
     sub_terrains: dict[str, SubTerrainCfg] = field(
         default_factory=lambda: {
             "flat": flat(proportion=0.0),
+            "wave_terrain": wave_terrain(
+                            proportion=0.3,
+                            amplitude_range=(0.0, 0.12),
+                            num_waves=4,
+                            border_width=0.2,
+            ),
             "pyramid_stairs": pyramid_stairs(
                 proportion=0.1,
                 step_height_range=(0.025, 0.10),
@@ -215,12 +224,6 @@ class BalanceRoughTerrainCfg(TerrainGeneratorCfg):
                 proportion=0.3,
                 noise_range=(0.01, 0.06),
                 noise_step=0.01,
-                border_width=0.2,
-            ),
-            "wave_terrain": wave_terrain(
-                proportion=0.3,
-                amplitude_range=(0.0, 0.12),
-                num_waves=4,
                 border_width=0.2,
             ),
         }
@@ -734,6 +737,7 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         # 延迟终止 / 差分加速度所需缓冲
         self._vertex_touch_count = np.zeros(num_envs, dtype=np.int32)
         self._tilt_count = np.zeros(num_envs, dtype=np.int32)
+        self._vel_track_count = np.zeros(num_envs, dtype=np.int32)
         self._last_dof_vel_for_acc = np.zeros((num_envs, NUM_BALANCE_ACTIONS), dtype=self._np_dtype)
         self._last_rw_body = None   
         self._last_lw_body = None
@@ -742,10 +746,12 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         self._powerless_active = np.zeros(num_envs, dtype=bool)
         self._term_vertex = 0
         self._term_tilt = 0
+        self._term_vel_track = 0
         self._total_steps = 0
         self._term_window_steps = 0
         self._hit_vertex = 0
         self._hit_tilt = 0
+        self._hit_vel_track = 0
 
         self._episode_vel_sum = np.zeros(num_envs, dtype=self._np_dtype)
         self._episode_cmd_vel_sum = np.zeros(num_envs, dtype=self._np_dtype)
@@ -825,6 +831,9 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         self._curriculum_last_eval_step = 0
         self._curriculum_eval_step_interval = 2000
 
+    def set_terrain_iteration(self, iteration: int) -> None:
+        self._spawn.set_iteration(iteration)
+
     @property
     def obs_groups_spec(self) -> dict[str, int]:
         return {"obs": 36, "critic": 36 + self._height_scan_dim}
@@ -874,6 +883,7 @@ class BalanceJoystickEnv(BalanceBaseEnv):
 
         self._vertex_touch_count[env_ids] = 0
         self._tilt_count[env_ids] = 0
+        self._vel_track_count[env_ids] = 0
         self._last_dof_vel_for_acc[env_ids] = 0.0
         self._last_motor_ctrl[env_ids] = 0.0
         cur_n = getattr(self, "_last_rw_body", None)
@@ -946,6 +956,8 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         self._curriculum_height_episode_count += len(env_ids)
 
     def _try_curriculum_eval(self) -> None:
+        self._try_eval_jump_curriculum()
+
         if not getattr(self._cfg.commands, "cmd_curriculum_enabled", True):
             return
 
@@ -997,18 +1009,22 @@ class BalanceJoystickEnv(BalanceBaseEnv):
             self._cmd_yaw_range[0] = np.clip(self._cmd_yaw_range[0] + yaw_step, -self._cmd_yaw_curriculum_max, -yaw_min_range)
             self._cmd_yaw_range[1] = np.clip(self._cmd_yaw_range[1] - yaw_step, yaw_min_range, self._cmd_yaw_curriculum_max)
 
-        if not self._jump_curriculum_enabled:
-            jump_height_count = self._curriculum_height_episode_count
-            if jump_height_count > 0:
-                height_good_ratio = self._curriculum_height_good_accum / jump_height_count
-                if height_good_ratio > 0.7:
-                    self._jump_curriculum_consecutive_good += 1
-                else:
-                    self._jump_curriculum_consecutive_good = 0
-                if self._jump_curriculum_consecutive_good >= self._curriculum_sustain_threshold:
-                    self._jump_curriculum_enabled = True
-            self._curriculum_height_good_accum = 0.0
-            self._curriculum_height_episode_count = 0
+    def _try_eval_jump_curriculum(self) -> None:
+        if not getattr(self._cfg.commands, "jump_curriculum_enabled", True):
+            return
+        if self._jump_curriculum_enabled:
+            return
+        jump_height_count = self._curriculum_height_episode_count
+        if jump_height_count > 0:
+            height_good_ratio = self._curriculum_height_good_accum / jump_height_count
+            if height_good_ratio > 0.7:
+                self._jump_curriculum_consecutive_good += 1
+            else:
+                self._jump_curriculum_consecutive_good = 0
+            if self._jump_curriculum_consecutive_good >= self._curriculum_sustain_threshold:
+                self._jump_curriculum_enabled = True
+        self._curriculum_height_good_accum = 0.0
+        self._curriculum_height_episode_count = 0
 
     def _update_height_sigma(self) -> None:
         rc = self._cfg.reward_config
@@ -1606,14 +1622,14 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         return np.asarray(1.0 - np.exp(-ang_diff / 0.1), dtype=get_global_dtype())
 
     def _reward_upright_swing_bonus(self, ctx: RewardContext) -> np.ndarray:
-        """离散奖励：tilt < 8° 且 swing 误差 < 8° → +1，否则 0。"""
+        """离散奖励：tilt < 7.5° 且 swing 误差 < 10° → +1，否则 0。"""
         tilt = np.asarray(ctx.info["tilt"], dtype=get_global_dtype())
         err_rw = np.abs(np.asarray(ctx.info["swing_err_rw"], dtype=get_global_dtype()))
         err_lw = np.abs(np.asarray(ctx.info["swing_err_lw"], dtype=get_global_dtype()))
         swing_err = np.maximum(err_rw, err_lw)
 
         tilt_th = np.deg2rad(7.5)
-        swing_th = np.deg2rad(8)
+        swing_th = np.deg2rad(10)
 
         return np.asarray((tilt < tilt_th) & (swing_err < swing_th), dtype=get_global_dtype())
 
@@ -1841,6 +1857,8 @@ class BalanceJoystickEnv(BalanceBaseEnv):
             info=info,
             enable_log=True,
             ctrl_dt=float(self._cfg.ctrl_dt),
+            clip_range=float(getattr(rc, "clip_range", 0.0)),
+            clip_ranges=getattr(rc, "clip_ranges", None) or None,
         )
         reward[powerless_mask] = 0.0
         return reward
@@ -2029,6 +2047,7 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         rw_theta, lw_theta = self._compute_swing_angles(sensors["rw_wheel"], sensors["lw_wheel"])
         tilt, body_vertex_z, terminated = self._detect_termination(
             sensors["upvector"], sensors["base_pos"], sensors["rw_wheel"], sensors["lw_wheel"],
+            commands, sensors["local_linvel"],
         )
         kin = self._compute_kinematics(sensors["dof_vel"], rw_theta, lw_theta, _dt)
 
@@ -2149,7 +2168,8 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         return rw_theta, lw_theta
 
     def _detect_termination(self, upvector: np.ndarray, base_pos: np.ndarray,
-                         rw_wheel: np.ndarray, lw_wheel: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                         rw_wheel: np.ndarray, lw_wheel: np.ndarray,
+                         commands: np.ndarray, local_linvel: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         rc = self._cfg.reward_config
         tilt = np.arccos(np.clip(upvector[:, 2], 0.0, 1.0))
         body_vertex_z_abs = self._get_body_min_z(base_pos, upvector)
@@ -2165,9 +2185,22 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         self._vertex_touch_count = np.where(vertex_touch, self._vertex_touch_count + 1, 0)
         self._tilt_count = np.where(body_tilt_too_high, self._tilt_count + 1, 0)
 
+        # ── 速度跟踪终止：|vx| / |cmd_vx| < vel_track_ratio_threshold 且 |cmd_vx| > vel_track_min_cmd ──
+        cmd_vx = commands[:, 0]
+        vx = local_linvel[:, 0]
+        vel_track_ratio_threshold = float(getattr(rc, "vel_track_ratio_threshold", 0.3))
+        vel_track_min_cmd = float(getattr(rc, "vel_track_min_cmd", 0.2))
+        vel_track_poor = (
+            (np.abs(cmd_vx) > vel_track_min_cmd)
+            & (np.abs(vx) / (np.abs(cmd_vx) + 1e-6) < vel_track_ratio_threshold)
+            & ~powerless_mask
+        )
+        self._vel_track_count = np.where(vel_track_poor, self._vel_track_count + 1, 0)
+
         terminated = (
             (self._vertex_touch_count >= rc.n_steps_delay)
             | (self._tilt_count >= rc.n_steps_delay)
+            | (self._vel_track_count >= rc.n_steps_delay)
         ) & ~powerless_mask
 
         if self._cfg.termination_config.terrain_out_of_bounds:
@@ -2185,15 +2218,17 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         self._term_window_steps += n_envs
         self._hit_vertex += int(np.sum(vertex_touch))
         self._hit_tilt += int(np.sum(body_tilt_too_high))
+        self._hit_vel_track += int(np.sum(vel_track_poor))
 
         if np.any(terminated):
             self._term_vertex += int(np.sum((self._vertex_touch_count >= rc.n_steps_delay) & terminated))
             self._term_tilt += int(np.sum((self._tilt_count >= rc.n_steps_delay) & terminated))
+            self._term_vel_track += int(np.sum((self._vel_track_count >= rc.n_steps_delay) & terminated))
 
         if self._term_window_steps >= 200 * n_envs:
-            self._term_vertex = self._term_tilt = 0
+            self._term_vertex = self._term_tilt = self._term_vel_track = 0
             self._term_window_steps = 0
-            self._hit_vertex = self._hit_tilt = 0
+            self._hit_vertex = self._hit_tilt = self._hit_vel_track = 0
 
         return tilt, body_vertex_z, terminated
 
@@ -2573,8 +2608,8 @@ class BalanceJoystickEnv(BalanceBaseEnv):
               f"  lw_torque="f"{float(np.mean(np.abs(torques[:, 5]))):+.3f}N·m"
               f"  r_leg_torque="f"{float(np.mean(np.abs(torques[:, 0]))):+.3f}/"f"{float(np.mean(np.abs(torques[:, 1]))):+.3f}"
               f"  l_leg_torque="f"{float(np.mean(np.abs(torques[:, 3]))):+.3f}/"f"{float(np.mean(np.abs(torques[:, 4]))):+.3f}"
-              f"  term_rate="f"{(self._term_vertex + self._term_tilt) / max(self._term_window_steps, 1) * 1000:.1f}/1000step"
-              f"  hit(touch/tilt)/1000step="f"{self._hit_vertex / max(self._term_window_steps, 1) * 1000:.0f}/{self._hit_tilt / max(self._term_window_steps, 1) * 1000:.0f}"
+              f"  term_rate="f"{(self._term_vertex + self._term_tilt + self._term_vel_track) / max(self._term_window_steps, 1) * 1000:.1f}/1000step"
+              f"  hit(touch/tilt/vel)/1000step="f"{self._hit_vertex / max(self._term_window_steps, 1) * 1000:.0f}/{self._hit_tilt / max(self._term_window_steps, 1) * 1000:.0f}/{self._hit_vel_track / max(self._term_window_steps, 1) * 1000:.0f}"
               f"  body_vertex_z mean={float(np.mean(body_vertex_z)):.4f}m  min={float(np.min(body_vertex_z)):.4f}m  max={float(np.max(body_vertex_z)):.4f}m  base_z_mean={float(np.mean(base_pos[:, 2])):.4f}m"
               f"  total_steps="f"{self._total_steps}"
               f"  step_counter="f"{getattr(self, 'step_counter', 0)}"

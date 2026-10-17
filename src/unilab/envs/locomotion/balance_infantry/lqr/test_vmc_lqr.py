@@ -21,6 +21,7 @@
     Q/E         - 减少/增加前馈力
     R/F         - 减少/增加 kp_leg
     T/G         - 减少/增加 kp_angle
+    H           - 跳跃 (再按取消)
     Space       - 切换暂停
     Enter       - 保存收集的数据 (--collect 时)
     Backspace   - 重置 (物理+控制器状态同步清零)
@@ -40,13 +41,13 @@ import mujoco.viewer
 # ═══════════════════════════════════════════════════════════════
 # PD 参数 (与 base.py ControlConfig 一致)
 # ═══════════════════════════════════════════════════════════════
-LEG_KP = (100., 100., 100., 100.)
-LEG_KD = (5., 5., 5., 5.)
-WHEEL_KD = (2.0, 2.0)
+LEG_KP = (50., 50., 50., 50.)
+LEG_KD = (3.2, 3.2, 3.2, 3.2)
+WHEEL_KD = (0.1, 0.1)
 
 # ── 动作空间参数 (与 mujoco.yaml 一致) ──
 ACTION_SCALE_JOINT = 0.5
-ACTION_SCALE_WHEEL = 10.0
+ACTION_SCALE_WHEEL = 50.0
 
 # ── 关节限位 (与 base.py JOINT_LIMITS 一致) ──
 JOINT_LIMITS = np.array([
@@ -181,7 +182,7 @@ def inverse_pd_targets(tau_lf, tau_rf, tau_lr, tau_rr,
 
 def build_observation(model, data, joint_qpos, dt, last_actions, default_dof_pos,
                       cmd_vel, cmd_yaw_rate, cmd_height):
-    """从 MuJoCo 状态构建 33 维观测 (与 joystick.py _compute_obs 一致)."""
+    """从 MuJoCo 状态构建 32 维观测 (与 jumpvf.py _compute_obs 一致)."""
     q_lf = data.qpos[joint_qpos[0]]
     q_rf = data.qpos[joint_qpos[1]]
     q_lr = data.qpos[joint_qpos[2]]
@@ -211,7 +212,7 @@ def build_observation(model, data, joint_qpos, dt, last_actions, default_dof_pos
     pitch = np.arcsin(np.clip(gravity_body[0], -1.0, 1.0))
     roll = np.arcsin(np.clip(-gravity_body[1], -1.0, 1.0))
 
-    commands = np.array([cmd_vel, cmd_yaw_rate, cmd_height, 0.0])
+    commands = np.array([cmd_vel, cmd_yaw_rate, cmd_height])
 
     yaw = np.arctan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
     yaw_error = 0.0
@@ -501,6 +502,21 @@ def main():
         "kd_yaw": 1.0,           # 偏航 D 增益
     }
 
+    # ── 跳跃状态机 (H 键触发) ──
+    JUMP_IDLE, JUMP_PUSH, JUMP_TUCK, JUMP_LAND = 0, 1, 2, 3
+    jump_state = {
+        "phase": JUMP_IDLE,
+        "timer": 0.0,
+        "peak_h": 0.0,          # 跳跃过程中达到的峰值高度 (绝对 base_z - terrain_z)
+        "init_h": 0.0,          # 跳跃开始时的 base 离地高度
+        "original_L0": 0.35,    # 保存原始 L0 用于恢复
+        "push_L0": 0.50,        # 蹬腿目标腿长 (最大)
+        "tuck_L0": 0.20,        # 收腿目标腿长
+        "push_ff": 400.0,       # 蹬腿期额外前馈力
+        "peak_tau": 0.0,        # 蹬地阶段峰值力矩 (N·m)
+    }
+    jump_history = []  # 记录每次跳跃: [(peak_abs_h, net_height, timestamp)]
+
     # 前一步 L0 / phi0 用于速度估计
     prev_L0 = {"L": 0.0, "R": 0.0}
     prev_phi0 = {"L": 0.0, "R": 0.0}
@@ -528,7 +544,7 @@ def main():
               f"(Z=切换LQR/PD)")
     print(f"\n  VMC + LQR 控制中，等待 MuJoCo viewer 窗口...")
     print(f"  W/S ±L0  A/D ±φ₀  Q/E -/+ff  Z=切换LQR/PD  Space=暂停  Esc=退出")
-    print(f"  ↑↓=前进/后退  ←→=左/右转  H=停止  1-6=选状态  0=全开\n")
+    print(f"  ↑↓=前进/后退  ←→=左/右转  H=跳跃  1-6=选状态  0=全开\n")
 
     def controller(model, data):
         """VMC + LQR 控制器 (参考 ChassisControl.c 链路).
@@ -572,6 +588,59 @@ def main():
         yaw_dot = data.qvel[3 + 2]
         current_yaw[0] = yaw
         base_vx = data.qvel[0]
+
+        # ── 跳跃状态机 (H 键触发) ──
+        if jump_state["phase"] != JUMP_IDLE:
+            jump_state["timer"] += dt
+            base_z = data.qpos[2]
+            terrain_z_jump = get_terrain_height(model, data, data.qpos[0], data.qpos[1])
+            base_h = base_z - terrain_z_jump
+            base_vz = data.qvel[2]
+            jump_state["peak_h"] = max(jump_state["peak_h"], base_h)
+
+            if jump_state["phase"] == JUMP_PUSH:
+                push_duration = 0.30
+                progress = min(jump_state["timer"] / push_duration, 1.0)
+                params["L0_target"] = jump_state["original_L0"] + (jump_state["push_L0"] - jump_state["original_L0"]) * progress
+                params["feedforward"] = jump_state["push_ff"]
+
+                wheels_off = jump_state["timer"] > 0.12 and base_h > 0.36
+                if wheels_off:
+                    jump_state["phase"] = JUMP_TUCK
+                    jump_state["timer"] = 0.0
+                    params["L0_target"] = jump_state["tuck_L0"]
+                    params["feedforward"] = 0.0
+                    print(f"  [JUMP] 离地! vz={base_vz:+.3f} H={base_h:.3f}")
+                elif progress >= 1.0:
+                    jump_state["phase"] = JUMP_TUCK
+                    jump_state["timer"] = 0.0
+                    params["L0_target"] = jump_state["tuck_L0"]
+                    params["feedforward"] = 0.0
+                    print(f"  [JUMP] 蹬地超时 vz={base_vz:+.3f} H={base_h:.3f}")
+
+            elif jump_state["phase"] == JUMP_TUCK:
+                params["L0_target"] = jump_state["tuck_L0"]
+                params["feedforward"] = 0.0
+                landing = jump_state["timer"] > 0.04 and base_vz < 0 and base_h < jump_state["init_h"] + 0.06
+                if landing:
+                    net_h = jump_state["peak_h"] - jump_state["init_h"]
+                    jump_state["phase"] = JUMP_LAND
+                    jump_state["timer"] = 0.0
+                    jump_history.append((jump_state["peak_h"], net_h, data.time))
+                    prev_best = max([h for _, h, _ in jump_history]) if jump_history else net_h
+                    best_str = f" (历史最佳: {prev_best:.3f}m)" if len(jump_history) > 1 else ""
+                    print(f"  [JUMP] 着陆! 峰值H={jump_state['peak_h']:.3f}m 净跳高={net_h:.3f}m 峰值τ={jump_state['peak_tau']:.1f}N·m{best_str}")
+
+            elif jump_state["phase"] == JUMP_LAND:
+                recover_duration = 0.3
+                progress = min(jump_state["timer"] / recover_duration, 1.0)
+                params["L0_target"] = jump_state["tuck_L0"] + (jump_state["original_L0"] - jump_state["tuck_L0"]) * progress
+                params["feedforward"] = 80.0 * progress
+                if progress >= 1.0:
+                    jump_state["phase"] = JUMP_IDLE
+                    params["L0_target"] = jump_state["original_L0"]
+                    params["feedforward"] = 80.0
+                    print(f"  [JUMP] 恢复完成")
 
         # ── 电机速度 (MuJoCo joint velocity) ──
         qvel_lr = data.qvel[model.jnt_dofadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "left_rear_joint")]]
@@ -701,6 +770,11 @@ def main():
         data.ctrl[act_ids[1]] = tau4_r  # RF (front motor)
         data.ctrl[act_ids[2]] = tau1_l  # LR (rear motor)
         data.ctrl[act_ids[3]] = tau1_r  # RR (rear motor)
+
+        # ── 跳跃力矩追踪 ──
+        if jump_state["phase"] in (JUMP_PUSH, JUMP_TUCK):
+            max_tau = max(abs(tau1_l), abs(tau4_l), abs(tau1_r), abs(tau4_r))
+            jump_state["peak_tau"] = max(jump_state["peak_tau"], max_tau)
         data.ctrl[act_ids[4]] = wheel_torque_l  # LW
         data.ctrl[act_ids[5]] = wheel_torque_r  # RW
 
@@ -761,7 +835,7 @@ def main():
 
     def key_callback(keycode):
         """键盘回调：实时调整 VMC 参数。"""
-        step = 0.005  # L0 步长
+        step = 0.01  # L0 步长
         step_angle = np.deg2rad(2.0)  # φ₀ 步长
         step_ff = 5.0  # 前馈力步长
         step_kp = 10.0  # 增益步长
@@ -818,10 +892,25 @@ def main():
             params["cmd_yaw_rate"] += 0.5
         elif keycode == 262:  # Right: 右转 -0.5 rad/s
             params["cmd_yaw_rate"] -= 0.5
-        elif keycode == 72:  # H: 停止
-            params["cmd_vel"] = 0.0
-            params["cmd_yaw_rate"] = 0.0
-            params["target_yaw"] = current_yaw[0]
+        elif keycode == 72:  # H: 跳跃
+            if jump_state["phase"] == JUMP_IDLE:
+                jump_state["phase"] = JUMP_PUSH
+                jump_state["timer"] = 0.0
+                jump_state["original_L0"] = params["L0_target"]
+                jump_state["push_L0"] = min(params["L0_target"] + 0.18, 0.50)
+                bx, by, bz = data.qpos[0], data.qpos[1], data.qpos[2]
+                tz = get_terrain_height(model, data, bx, by)
+                jump_state["init_h"] = bz - tz
+                jump_state["peak_h"] = jump_state["init_h"]
+                jump_state["peak_tau"] = 0.0
+                print(f">>> H 跳跃触发! 初始H={jump_state['init_h']:.3f}m "
+                      f"蹬腿L0: {jump_state['original_L0']:.3f}→{jump_state['push_L0']:.3f}m "
+                      f"ff: 80→{jump_state['push_ff']:.0f}N <<<")
+            else:
+                jump_state["phase"] = JUMP_IDLE
+                params["L0_target"] = jump_state["original_L0"]
+                params["feedforward"] = 80.0
+                print(">>> 跳跃取消 <<<")
 
         # 打印当前参数
         if keycode in (87, 83, 65, 68, 81, 69, 82, 70, 84, 71):

@@ -68,6 +68,7 @@ class ActorCriticSequence(nn.Module):
 
         self.orthogonal_init = orthogonal_init
         self.latent_dim = latent_dim
+        self.num_obs = num_obs
 
         activation = get_activation(activation)
 
@@ -143,7 +144,7 @@ class ActorCriticSequence(nn.Module):
         # Observation normalization
         self.obs_normalization = obs_normalization
         if self.obs_normalization:
-            self.encoder_obs_normalizer = EmpiricalNormalization(num_encoder_obs)
+            self.encoder_obs_normalizer = EmpiricalNormalization(num_obs)
             self.actor_obs_normalizer = EmpiricalNormalization(num_obs + latent_dim)
             self.critic_obs_normalizer = EmpiricalNormalization(num_critic_obs)
         else:
@@ -223,7 +224,7 @@ class ActorCriticSequence(nn.Module):
         actor_input = self.actor_obs_normalizer(torch.cat((observations, self.latent), dim=-1))
         actions_mean = self.actor(actor_input)
 
-        # DEBUG
+        # DEBUG: 打印 obs_hist (165d) + action (6d) 用于 --compare_obs
         if not hasattr(self, '_debug_inf_count'):
             object.__setattr__(self, '_debug_inf_count', 0)
         if self._debug_inf_count < 5:
@@ -232,6 +233,14 @@ class ActorCriticSequence(nn.Module):
                   f"latent[0]={self.latent[0].cpu().tolist()}  "
                   f"act={actions_mean[0].cpu().tolist()}")
             object.__setattr__(self, '_debug_inf_count', self._debug_inf_count + 1)
+        # 每50步打印完整 obs_hist + action，用于 --compare_obs 对比
+        if not hasattr(self, '_debug_hist_count'):
+            object.__setattr__(self, '_debug_hist_count', 0)
+        self._debug_hist_count += 1
+        if self._debug_hist_count % 50 == 1:
+            hist_165 = ",".join(f"{x:.6f}" for x in observation_history[0].cpu().tolist())
+            act_6 = ",".join(f"{actions_mean[0, i].item():.6f}" for i in range(actions_mean.shape[1]))
+            print(f"[HIST_165 #{self._debug_hist_count}] --compare_obs='{hist_165};{act_6}'")
 
         return actions_mean, self.latent
 
@@ -241,7 +250,10 @@ class ActorCriticSequence(nn.Module):
         return value
 
     def encode(self, observation_history, **kwargs):
-        encoder_input = self.encoder_obs_normalizer(observation_history)
+        batch_size = observation_history.shape[0]
+        encoder_input = self.encoder_obs_normalizer(
+            observation_history.view(-1, self.num_obs)
+        ).view(batch_size, -1)
         latent = self.encoder(encoder_input)
         return latent
 

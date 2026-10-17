@@ -200,6 +200,14 @@ class SimBackend(abc.ABC):
         """Return the backend dof-armature table."""
         raise NotImplementedError(f"{self.__class__.__name__} does not expose dof armature")
 
+    def get_dof_damping(self) -> np.ndarray:
+        """Return the backend dof-damping table."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not expose dof damping")
+
+    def get_dof_frictionloss(self) -> np.ndarray:
+        """Return the backend dof-frictionloss table."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not expose dof frictionloss")
+
     def get_motion_body_ids(self, names: Sequence[str]) -> np.ndarray:
         """Resolve MuJoCo-style body IDs used by motion datasets."""
         raise NotImplementedError(f"{self.__class__.__name__} does not expose motion body ids")

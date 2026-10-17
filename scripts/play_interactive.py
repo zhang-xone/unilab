@@ -41,6 +41,7 @@ Mouse yaw control:
 # pyright: reportAttributeAccessIssue=false, reportArgumentType=false, reportOptionalMemberAccess=false, reportOptionalSubscript=false
 
 import argparse
+import copy
 import ctypes
 import shutil
 import subprocess
@@ -218,7 +219,7 @@ def _algo_config_dict(cfg: DictConfig | None) -> dict[str, Any]:
     return cast(dict[str, Any], train_cfg_raw)
 
 
-SUPPORTED_INTERACTIVE_ALGOS = ("ppo", "ppo_sequence", "appo", "sac", "flashsac", "hora_distill")
+SUPPORTED_INTERACTIVE_ALGOS = ("ppo", "ppo_sequence", "appo", "sac", "flashsac", "hora_distill", "ppo_him")
 _CONFIG_ROOT_BY_ALGO = {
     "ppo": "ppo",
     "ppo_sequence": "ppo_sequence",
@@ -226,6 +227,7 @@ _CONFIG_ROOT_BY_ALGO = {
     "sac": "offpolicy",
     "flashsac": "offpolicy",
     "hora_distill": "hora_distill",
+    "ppo_him": "ppo_him",
 }
 _OFFPOLICY_INTERACTIVE_ALGOS = {"sac", "flashsac"}
 
@@ -1248,6 +1250,27 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
                 device=device,
                 log=lambda message: print(f"[play_interactive] {message}"),
             )
+        elif algo == "ppo_him":
+            from unilab.algos.torch.him_ppo.runner import HIMOnPolicyRunner
+
+            def _him_train_cfg_normalizer(train_cfg):
+                return dict(copy.deepcopy(train_cfg))
+
+            session = create_rsl_rl_playback_session(
+                playback_cfg=playback_cfg,
+                env_factory=_create_env,
+                algo_config=_algo_config_dict(cfg),
+                root_dir=ROOT_DIR,
+                device=device,
+                checkpoint_resolver=resolve_checkpoint,
+                checkpoint_input_dim_reader=_infer_checkpoint_actor_input_dim,
+                entrypoint_log_root=get_entrypoint_log_root,
+                wrapper_cls=RslRlVecEnvWrapper,
+                runner_cls=HIMOnPolicyRunner,
+                policy_obs_dims_getter=get_policy_obs_dims,
+                train_cfg_normalizer=_him_train_cfg_normalizer,
+                log=lambda message: print(f"[play_interactive] {message}"),
+            )
         else:
             raise ValueError(f"Unsupported interactive playback algo: {algo}")
     except RuntimeError as exc:
@@ -1320,12 +1343,21 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
     commander = _build_keyboard_commander(env, args)
     if commander is not None:
         env.set_autoreset(False)
+    env._play_mode = True
 
     mouse_yaw_active = bool(getattr(args, "mouse_yaw", False))
     mouse_yaw_sensitivity = float(getattr(args, "mouse_yaw_sensitivity", 0.015))
     mouse_yaw_decay = float(getattr(args, "mouse_yaw_decay", 0.85))
     mouse_last_x = 0.0
     mouse_last_y = 0.0
+
+    limp_mode = False
+    _limp_original_pre_step_fn = env._backend._pre_step_control_fn if hasattr(env, "_backend") else None
+
+    def _limp_zero_torque_wrapper(backend, policy_ctrl):
+        if _limp_original_pre_step_fn is not None:
+            _limp_original_pre_step_fn(backend, policy_ctrl)
+        return np.zeros(policy_ctrl.shape, dtype=policy_ctrl.dtype)
 
     _x11 = None
     _x11_display = None
@@ -1370,7 +1402,7 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
         _x11_display = None
 
     def _on_key(keycode: int) -> None:
-        nonlocal mouse_yaw_active, mouse_last_x, mouse_last_y
+        nonlocal mouse_yaw_active, mouse_last_x, mouse_last_y, limp_mode
         if keycode == ord(" "):
             paused = controls.toggle_pause()
             status = "paused" if paused else "resumed"
@@ -1393,6 +1425,16 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
             mouse_last_y = 0.0
             status = "ON (mouse 左右划控制 vyaw)" if mouse_yaw_active else "OFF"
             print(f"[play_interactive] 鼠标偏航控制: {status}")
+        elif keycode in (ord("L"), ord("l")):
+            limp_mode = not limp_mode
+            if limp_mode:
+                if hasattr(env, "_backend") and _limp_original_pre_step_fn is not None:
+                    env._backend.set_pre_step_control(_limp_zero_torque_wrapper)
+                print("[play_interactive] 无力模式: ON (ctrl 直接归零)")
+            else:
+                if hasattr(env, "_backend") and _limp_original_pre_step_fn is not None:
+                    env._backend.set_pre_step_control(_limp_original_pre_step_fn)
+                print("[play_interactive] 无力模式: OFF (恢复策略控制)")
         elif commander is not None and keycode == _KEY_BACKSPACE:
             playback_session.reset()
             commander.zero()
@@ -1400,12 +1442,38 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
         elif keycode in (ord("H"), ord("h")) and env is not None:
             cmds = env.state.info.get("commands")
             if isinstance(cmds, np.ndarray) and cmds.shape[1] >= 5:
-                current = cmds[0, 4]
-                cmds[:, 4] = 0.0 if current > 0.5 else 1.0
-                if current > 0.5:
-                    print("[play_interactive] jump released (H)")
+                current_jumph = float(getattr(env, "_jumph", np.zeros(1))[0])
+                if current_jumph > 0.0:
+                    env._jumph[:] = 0.0
+                    if hasattr(env, "_jump_vz_target"):
+                        env._jump_vz_target[:] = 0.0
+                    cmds[:, 4] = 0.0
+                    for attr in (
+                        "_jump_in_progress", "_jump_need_tuck", "_jump_phase",
+                    ):
+                        arr = getattr(env, attr, None)
+                        if arr is not None:
+                            arr[:] = False if attr != "_jump_phase" else 0
+                    for attr in ("_jump_phase_time", "_jump_step_counter",
+                                 "_jump_ref_vel_z", "_jump_ref_phase",
+                                 "_jump_ref_height", "_jump_ref_release_vel_z",
+                                 "_jump_push_max_vel_z",
+                                 "_jump_assist_selected"):
+                        arr = getattr(env, attr, None)
+                        if arr is not None:
+                            arr[:] = 0
+                    if hasattr(env, "_jump_debug_enter_count"):
+                        env._jump_debug_enter_count = 0
+                    print("[play_interactive] jump cancelled (H)")
                 else:
-                    print("[play_interactive] jump triggered (H)")
+                    rc = getattr(getattr(env, "_cfg", None), "reward_config", None)
+                    play_jumph = float(getattr(rc, "jump_height_play", 0.10))
+                    play_jumph = max(play_jumph, 0.02)
+                    env._jumph[:] = play_jumph
+                    if hasattr(env, "_jump_vz_target"):
+                        env._jump_vz_target[:] = np.sqrt(2.0 * 9.81 * play_jumph)
+                    cmds[:, 4] = play_jumph
+                    print(f"[play_interactive] jump triggered (H) jumph={play_jumph:.2f}")
         elif commander is not None:
             _handle_command_key(commander, keycode)
 
@@ -1493,6 +1561,25 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
                     env.state.info["commands"][:, :commander.command.shape[0]] = commander.command
 
                 playback_session.advance(controls)
+
+                # Auto-clear H-jump command on landing
+                _jumph = getattr(env, "_jumph", None)
+                if _jumph is not None and _jumph[0] > 0:
+                    info = playback_session.info
+                    was_in_flight_arr = info.get("was_in_flight")
+                    if was_in_flight_arr is not None:
+                        was_in_flight = bool(np.asarray(was_in_flight_arr).flat[0])
+                        if not hasattr(env, "_play_was_in_flight"):
+                            env._play_was_in_flight = False
+                        if env._play_was_in_flight and not was_in_flight:
+                            _jumph[:] = 0.0
+                            cmds_arr = info.get("commands")
+                            if cmds_arr is not None and cmds_arr.shape[1] >= 5:
+                                cmds_arr[:, 4] = 0.0
+                            if hasattr(env, "_jump_in_progress"):
+                                env._jump_in_progress[:] = False
+                            print("[play_interactive] jump auto-cleared on landing")
+                        env._play_was_in_flight = was_in_flight
 
                 # Push env state[0] into viz_data and refresh scene
                 phys = playback_session.physics_state()[0].astype(np.float64)

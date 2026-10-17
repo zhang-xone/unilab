@@ -1,0 +1,15 @@
+<mujoco model="flat_with_pillar">
+  <include file="scene_flat.xml"/>
+
+  <worldbody>
+    <body name="support_pillar" pos="0 0 0">
+      <!-- 柱身：从地面到柱顶板下沿 -->
+      <geom name="pillar_shaft" type="box" size="0.18 0.08 0.215" pos="0 0 0.215"
+            rgba="0.4 0.4 0.5 1" contype="1" conaffinity="1"/>
+      <!-- 柱顶板：略小于 base_box(0.28×0.14)，超高摩擦 -->
+      <geom name="pillar_top" type="box" size="0.22 0.10 0.01" pos="0 0 0.44"
+            rgba="0.6 0.6 0.7 1" friction="100 50 50"
+            contype="1" conaffinity="1"/>
+    </body>
+  </worldbody>
+</mujoco>

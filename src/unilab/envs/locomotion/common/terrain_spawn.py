@@ -38,9 +38,20 @@ class BaseSpawnManager:
     def record_episode_start(self, env_ids: np.ndarray, qpos_xyz: np.ndarray) -> None:
         del env_ids, qpos_xyz
 
-    def update_on_done(self, done_indices: np.ndarray, current_xyz: np.ndarray) -> dict[str, float]:
-        del done_indices, current_xyz
+    def update_on_done(
+        self,
+        done_indices: np.ndarray,
+        current_xyz: np.ndarray,
+        *,
+        episode_tracking_reward_sum: np.ndarray | None = None,
+        episode_steps: np.ndarray | None = None,
+    ) -> dict[str, float]:
+        del done_indices, current_xyz, episode_tracking_reward_sum, episode_steps
         return {}
+
+    def set_iteration(self, iteration: int) -> None:
+        """No-op: terrain type curriculum is only active in :class:`TerrainSpawnManager`."""
+        del iteration
 
 
 @dataclass
@@ -49,6 +60,8 @@ class TerrainCurriculumCfg:
     """If True, levels start at 0 and evolve via promote/demote."""
     init_level: int = 0
     """Initial terrain level. 恢复训练时设为上次 mean_level，避免从 0 重新爬。"""
+    randomize_init_level: bool = False
+    """If True, each env gets a random level in [0, init_level]."""
     promote_frac: float = 0.5
     """Walked distance > promote_frac * cell_size promotes one level."""
     demote_frac: float = 0.25
@@ -59,6 +72,26 @@ class TerrainCurriculumCfg:
     spawn_height_margin: float = 0.05
     """Extra z added on top of the sampled terrain surface height."""
     seed: int | None = None
+    curriculum_mode: str = "distance"
+    """Promote/demote strategy: "distance" | "tracking" | "hybrid".
+    
+    - ``distance``: promote/demote based on walked distance (promote_frac / demote_frac).
+    - ``tracking``: promote/demote based on velocity tracking reward.
+    - ``hybrid``: promote by distance, demote by tracking reward (Fudan style).
+    """
+    tracking_reward_threshold: float = 0.7
+    """Mean tracking reward > this threshold promotes one level."""
+    tracking_reward_demote_threshold: float = 0.3
+    """Mean tracking reward < this threshold demotes one level."""
+    type_curriculum_enabled: bool = False
+    """If True, terrain types advance in registration order every ``type_curriculum_switch_interval``
+    iterations. After all types are exhausted, ``type_cols`` is randomized per env."""
+    type_curriculum_switch_interval: int = 200
+    """Number of training iterations between terrain-type switches."""
+    type_curriculum_iteration_offset: int = 0
+    """Offset subtracted from training iteration before computing type index.
+    Set to ``-current_iter`` on resume to restart type sequence from 0,
+    or leave at 0 to continue from the current iteration's type."""
 
 
 class TerrainSpawnManager(BaseSpawnManager):
@@ -107,7 +140,10 @@ class TerrainSpawnManager(BaseSpawnManager):
         self.type_cols = self._rng.integers(0, num_cols, size=num_envs).astype(np.int32)
         if cfg.enabled:
             init_lvl = max(0, min(int(cfg.init_level), num_rows - 1))
-            self.levels = np.full(num_envs, init_lvl, dtype=np.int32)
+            if cfg.randomize_init_level:
+                self.levels = self._rng.integers(0, init_lvl + 1, size=num_envs).astype(np.int32)
+            else:
+                self.levels = np.full(num_envs, init_lvl, dtype=np.int32)
         else:
             self.levels = self._rng.integers(0, num_rows, size=num_envs).astype(np.int32)
 
@@ -128,6 +164,10 @@ class TerrainSpawnManager(BaseSpawnManager):
     def get_terrain_type_for(self, env_ids: np.ndarray) -> list[str]:
         cols = self.type_cols[env_ids]
         return [self._terrain_type_names[c] for c in cols]
+
+    def get_terrain_difficulty_for(self, env_ids: np.ndarray) -> np.ndarray:
+        rows = self.levels[env_ids]
+        return rows.astype(np.float64) / max(self._num_rows - 1, 1)
 
     def apply_spawn(
         self,
@@ -198,7 +238,14 @@ class TerrainSpawnManager(BaseSpawnManager):
         self._episode_start_xyz[env_ids] = qpos_xyz
         self._has_started[env_ids] = True
 
-    def update_on_done(self, done_indices: np.ndarray, current_xyz: np.ndarray) -> dict[str, float]:
+    def update_on_done(
+        self,
+        done_indices: np.ndarray,
+        current_xyz: np.ndarray,
+        *,
+        episode_tracking_reward_sum: np.ndarray | None = None,
+        episode_steps: np.ndarray | None = None,
+    ) -> dict[str, float]:
         active_mask = self._has_started[done_indices]
         active = done_indices[active_mask]
         num_skipped = int((~active_mask).sum())
@@ -220,10 +267,29 @@ class TerrainSpawnManager(BaseSpawnManager):
         num_promoted = 0
         num_demoted = 0
         if self._cfg.enabled:
-            promote_threshold = self._cfg.promote_frac * self._cell_size
-            demote_threshold = self._cfg.demote_frac * self._cell_size
-            promote_mask = walked > promote_threshold
-            demote_mask = walked < demote_threshold
+            if self._cfg.curriculum_mode == "hybrid":
+                promote_threshold = self._cfg.promote_frac * self._cell_size
+                promote_mask = walked > promote_threshold
+
+                if episode_tracking_reward_sum is not None and episode_steps is not None:
+                    eps_steps = episode_steps[done_indices][active_mask].astype(np.float64)
+                    eps_steps = np.maximum(eps_steps, 1.0)
+                    tracking_reward_mean = episode_tracking_reward_sum[done_indices][active_mask] / eps_steps
+                    demote_mask = (tracking_reward_mean < self._cfg.tracking_reward_demote_threshold) & (~promote_mask)
+                else:
+                    demote_mask = np.zeros(active.size, dtype=bool)
+            elif self._cfg.curriculum_mode == "tracking" and episode_tracking_reward_sum is not None and episode_steps is not None:
+                eps_steps = episode_steps[done_indices][active_mask].astype(np.float64)
+                eps_steps = np.maximum(eps_steps, 1.0)
+                tracking_reward_mean = episode_tracking_reward_sum[done_indices][active_mask] / eps_steps
+
+                promote_mask = tracking_reward_mean > self._cfg.tracking_reward_threshold
+                demote_mask = tracking_reward_mean < self._cfg.tracking_reward_demote_threshold
+            else:
+                promote_threshold = self._cfg.promote_frac * self._cell_size
+                demote_threshold = self._cfg.demote_frac * self._cell_size
+                promote_mask = walked > promote_threshold
+                demote_mask = walked < demote_threshold
 
             promote_ids = active[promote_mask]
             demote_ids = active[demote_mask]
@@ -252,3 +318,14 @@ class TerrainSpawnManager(BaseSpawnManager):
             "num_demoted": num_demoted,
             "num_skipped": num_skipped,
         }
+
+    def set_iteration(self, iteration: int) -> None:
+        if not self._cfg.type_curriculum_enabled:
+            return
+        interval = max(1, self._cfg.type_curriculum_switch_interval)
+        effective_iter = max(0, iteration + self._cfg.type_curriculum_iteration_offset)
+        type_idx = effective_iter // interval
+        if type_idx >= self._num_cols:
+            self.type_cols = self._rng.integers(0, self._num_cols, size=len(self.type_cols)).astype(np.int32)
+        else:
+            self.type_cols[:] = type_idx

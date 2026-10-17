@@ -428,6 +428,75 @@ def _collect_mujoco_assets(asset_dir: Path) -> dict[str, bytes]:
     return assets
 
 
+def _inject_box_geoms(root: ET.Element, box_geoms: list, cylinder_geoms: list | None = None) -> None:
+    """Inject box and cylinder geom elements into the scene's worldbody."""
+    worldbody = root.find("worldbody")
+    if worldbody is None:
+        raise ValueError("Scene XML has no <worldbody> tag.")
+    if box_geoms:
+        for i, bg in enumerate(box_geoms):
+            name = bg.name if bg.name else f"box_geom_{i}"
+            attrs = {
+                "name": name,
+                "type": "box",
+                "size": _format_values(list(bg.size)),
+                "pos": _format_values(list(bg.pos)),
+                "contype": "2",
+                "conaffinity": "2",
+                "friction": _format_values(list(bg.friction)),
+            }
+            if bg.material_rgba:
+                material_name = f"box_mat_{i}"
+                asset = root.find("asset")
+                if asset is None:
+                    asset = ET.Element("asset")
+                    root.insert(0, asset)
+                ET.SubElement(
+                    asset,
+                    "material",
+                    {"name": material_name, "rgba": _format_values(list(bg.material_rgba))},
+                )
+                attrs["material"] = material_name
+            ET.SubElement(worldbody, "geom", attrs)
+    if cylinder_geoms:
+        for i, cg in enumerate(cylinder_geoms):
+            name = cg.name if cg.name else f"cyl_geom_{i}"
+            size_str = f"{cg.size[0]} {cg.size[1]} {cg.size[2]}"
+            attrs = {
+                "name": name,
+                "type": "cylinder",
+                "size": size_str,
+                "pos": _format_values(list(cg.pos)),
+                "contype": "2",
+                "conaffinity": "2",
+                "friction": _format_values(list(cg.friction)),
+            }
+            if cg.quat != (1.0, 0.0, 0.0, 0.0):
+                _Y_QUAT = (0.7071068, 0.7071068, 0.0, 0.0)
+                if cg.quat == _Y_QUAT:
+                    half_len = cg.size[2]
+                    attrs.pop("pos")
+                    attrs["fromto"] = _format_values([
+                        cg.pos[0], cg.pos[1] - half_len, cg.pos[2],
+                        cg.pos[0], cg.pos[1] + half_len, cg.pos[2],
+                    ])
+                else:
+                    attrs["quat"] = _format_values(list(cg.quat))
+            if cg.material_rgba:
+                material_name = f"cyl_mat_{i}"
+                asset = root.find("asset")
+                if asset is None:
+                    asset = ET.Element("asset")
+                    root.insert(0, asset)
+                ET.SubElement(
+                    asset,
+                    "material",
+                    {"name": material_name, "rgba": _format_values(list(cg.material_rgba))},
+                )
+                attrs["material"] = material_name
+            ET.SubElement(worldbody, "geom", attrs)
+
+
 @overload
 def materialize_mujoco_hfield_attached_scene(
     *,
@@ -487,13 +556,15 @@ def materialize_mujoco_hfield_attached_scene(
         size=list(generated.hfield_size),
     )
     spec.worldbody.add_light(pos=[0.0, 0.0, 8.0], dir=[0.0, 0.0, -1.0])
-    spec.worldbody.add_geom(
+    geom_spec = spec.worldbody.add_geom(
         name=geom_name,
         type=mujoco.mjtGeom.mjGEOM_HFIELD,
         hfieldname=hfield_name,
         pos=list(generated.geom_pos),
         condim=6,
     )
+    geom_spec.solref = np.array([0.02, 1.0], dtype=np.float64)
+    geom_spec.solimp = np.array([0.9, 0.95, 0.001, 0.0, 0.0], dtype=np.float64)
 
     robot_spec = mujoco.MjSpec.from_file(str(robot_path))
     frame = spec.worldbody.add_frame()
@@ -506,6 +577,8 @@ def materialize_mujoco_hfield_attached_scene(
     _ensure_generated_hfield_scene_visuals(root, geom_name)
     for fragment_file in fragment_files:
         _merge_scene_fragment(root, _resolve_scene_fragment_path(fragment_file, robot_path))
+
+    _inject_box_geoms(root, generated.box_geoms, generated.cylinder_geoms)
 
     scene_xml = output_path / "scene.xml"
     _write_xml_root(root, scene_xml)

@@ -59,6 +59,8 @@ env:
     promote_frac: 0.3
     demote_frac: 0.1
     spawn_height_margin: 0.05
+    type_curriculum_enabled: false
+    type_curriculum_switch_interval: 200
   debug_enabled: true
   sim_dt: 0.002
   ctrl_dt: 0.02

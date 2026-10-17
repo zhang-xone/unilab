@@ -16,3 +16,10 @@ env:
   domain_rand:
     randomize_kp: false
     randomize_kd: false
+    randomize_base_mass: false
+    random_com: false
+    randomize_ground_friction: false
+    randomize_inertia: false
+    randomize_default_dof_pos: false
+    push_robots: false
+    curriculum_enabled: false

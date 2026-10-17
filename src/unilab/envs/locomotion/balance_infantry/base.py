@@ -108,6 +108,7 @@ class VMCConfig:
     kp_l0: float = 500.0
     kd_l0: float = 50.0
     feedforward_force: float = 90.0
+    ff_anneal_target: float = 0.0
     action_scale_theta: float = 0.7
     action_scale_l0: float = 0.15
     action_scale_wheel: float = 10.0
@@ -119,9 +120,9 @@ class VMCConfig:
 @dataclass
 class ControlConfig(PdControlConfig):
     """PD 控制参数（每关节独立配置）。wheel_kd 长度 2：[LW, RW]。"""
-    wheel_kd: tuple = (1.6, 1.6)
-    leg_kp: tuple = (80., 80., 80., 80.)
-    leg_kd: tuple = (4., 4., 4., 4.)
+    wheel_kd: tuple = (0.1, 0.1)
+    leg_kp: tuple = (40., 40., 40., 40.)
+    leg_kd: tuple = (2., 2., 2., 2.)
     clip_actions: float = 1.0
     action_scale_joint: float = 0.5
     action_scale_wheel: float = 10.0
@@ -129,6 +130,7 @@ class ControlConfig(PdControlConfig):
     action_smoothing: float = 0.8
     action_smoothing_range: tuple = (0.2, 1.0)
     action_delay_range: tuple = (0, 0)  # (min, max) substeps, FIFO 随机延迟
+    obs_delay_range: tuple = (0, 0)     # (min, max) substeps, 观测延迟（默认跟随 action_delay_range）
     vmc: VMCConfig = field(default_factory=VMCConfig)
 
 
@@ -143,7 +145,7 @@ class BalanceInfantryBaseCfg(LocomotionBaseCfg):
     noise_config: NoiseConfig = field(default_factory=NoiseConfig)
     control_config: ControlConfig = field(default_factory=ControlConfig)
     asset: Asset = field(default_factory=Asset)
-    sim_dt: float = 0.002
+    sim_dt: float = 0.005
     ctrl_dt: float = 0.02
     obs_manual_norm: bool = True
     obs_vel: bool = False

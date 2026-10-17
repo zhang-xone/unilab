@@ -93,7 +93,7 @@ class Cod2026BaseCfg(LocomotionBaseCfg):
     noise_config: NoiseConfig = field(default_factory=NoiseConfig) # type: ignore[assignment]
     control_config: ControlConfig = field(default_factory=ControlConfig) # type: ignore[assignment]
     asset: Asset = field(default_factory=Asset)
-    sim_dt: float = 0.002
+    sim_dt: float = 0.005
     ctrl_dt: float = 0.02
 
 

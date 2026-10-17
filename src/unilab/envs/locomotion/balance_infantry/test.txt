@@ -2,37 +2,52 @@ PYTHONUNBUFFERED=1 uv run train \
   --algo ppo_sequence \
   --task balance_infantry_joystick_flat \
   --sim mujoco \
-  algo.max_iterations=1500 \
-  algo.num_steps_per_env=24 \
-  training.no_play=false \
+  algo.max_iterations=3000 \
+  algo.num_steps_per_env=48 \
+  training.no_play=true \
   training.logger=tensorboard
 
+  balance_infantry_jumpv0_flat
+  balance_infantry_joystick_flat
+  balance_infantry_jump_fudan_flat
+  balance_infantry_jumpv0_flat_pretrain
+  motrix mujoco
 PYTHONUNBUFFERED=1 uv run train \
   --algo ppo_sequence \
-  --task balance_infantry_joystick_flat \
+  --task  balance_infantry_joystick_flat \
   --sim mujoco \
-  algo.load_run="2026-08-27_15-55-47_mujoco" \
+  algo.load_run="2026-10-16_10-19-08_mujoco" \
   algo.checkpoint=-1 \
-  algo.max_iterations=1500 \
-  algo.num_steps_per_env=24 \
-  training.no_play=true
+  algo.max_iterations=3000 \
+  algo.num_steps_per_env=48 \
+  training.no_play=true\
+  training.logger=tensorboard
+
+  cd /home/xxx/ubuntu_software/unilab/UniLab
 
 uv run scripts/play_interactive.py \
   --algo ppo_sequence \
   --task balance_infantry_joystick_flat \
   --sim mujoco \
-  algo.load_run=-1 \
+  algo.load_run=-1\
   algo.checkpoint=-1 \
   interactive.action_mode=policy \
   interactive.keyboard=true \
   +interactive.require_keyboard_command_obs=false \
+  interactive.keyboard_step_lin=0.5 \
+  interactive.keyboard_step_ang=0.5 \
   algo.num_envs=1 \
   training.device=null \
   interactive.speed=1.0
 
+ uv run eval --algo ppo_sequence --task balance_infantry_joystick_flat --sim mujoco --load-run 2026-10-11_19-41-20_mujoco\
+  --render-mode record
+
   random,policy,zero
   ppo_sequence
-  
+  interactive.keyboard_step_lin=0.4 \
+  interactive.keyboard_step_ang=0.4 \
+
   cd /home/xxx/ubuntu_software/unilab/UniLab && python src/unilab/envs/locomotion/balance_infantry/debug_vmc_fk.py
   
   PYTHONUNBUFFERED=1 uv run train \
@@ -46,7 +61,7 @@ uv run scripts/play_interactive.py \
 
   uv run scripts/play_interactive.py \
   --algo ppo_him \
-  --task balance_infantry_joystick_flat \
+  --task balance_infantry_jumpv0_flat \
   --sim mujoco \
   algo.load_run=-1 \
   algo.checkpoint=-1 \

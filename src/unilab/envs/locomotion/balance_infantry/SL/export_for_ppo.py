@@ -32,28 +32,28 @@ OBS_MEAN = np.array([
     0.0, 0.0, 0.0,               # 0-2:  gyro
     0.0,                          # 3:    pitch
     0.0,                          # 4:    roll
-    0.0, 0.0, 0.29, 0.05,        # 5-8:  cmd(vx,vyaw,height,jump)
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # 9-14: last_actions
-    0.0, 0.0,                     # 15-16: wheel_pos_err
-    0.0, 0.0,                     # 17-18: sin/cos yaw_error
-    0.0, 0.0, 0.0, 0.0,          # 19-22: dof_pos_err
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # 23-28: dof_vel
-    0.3, 0.3,                     # 29-30: vmc_theta
-    0.28, 0.28,                   # 31-32: vmc_L0
+    0.0, 0.0, 0.29,              # 5-7:  cmd(vx,vyaw,height)
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # 8-13: last_actions
+    0.0, 0.0,                     # 14-15: wheel_pos_err
+    0.0, 0.0,                     # 16-17: sin/cos yaw_error
+    0.0, 0.0, 0.0, 0.0,          # 18-21: dof_pos_err
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # 22-27: dof_vel
+    0.3, 0.3,                     # 28-29: vmc_theta
+    0.28, 0.28,                   # 30-31: vmc_L0
 ], dtype=np.float32)
 
 OBS_STD = np.array([
     1.5, 1.5, 1.5,               # 0-2:  gyro
     0.15,                         # 3:    pitch
     0.10,                         # 4:    roll
-    1.5, 2.0, 0.08, 0.22,        # 5-8:  cmd
-    0.6, 0.6, 0.6, 0.6, 0.6, 0.6,  # 9-14: last_actions
-    0.3, 0.3,                     # 15-16: wheel_pos_err
-    0.6, 0.6,                     # 17-18: sin/cos yaw_error
-    0.3, 0.3, 0.3, 0.3,          # 19-22: dof_pos_err
-    3.0, 3.0, 3.0, 3.0, 3.0, 3.0,  # 23-28: dof_vel
-    0.4, 0.4,                     # 29-30: vmc_theta
-    0.05, 0.05,                   # 31-32: vmc_L0
+    1.5, 2.0, 0.08,              # 5-7:  cmd(vx,vyaw,height)
+    0.6, 0.6, 0.6, 0.6, 0.6, 0.6,  # 8-13: last_actions
+    0.3, 0.3,                     # 14-15: wheel_pos_err
+    0.6, 0.6,                     # 16-17: sin/cos yaw_error
+    0.3, 0.3, 0.3, 0.3,          # 18-21: dof_pos_err
+    3.0, 3.0, 3.0, 3.0, 3.0, 3.0,  # 22-27: dof_vel
+    0.4, 0.4,                     # 28-29: vmc_theta
+    0.05, 0.05,                   # 30-31: vmc_L0
 ], dtype=np.float32)
 
 # 编码器归一化: 5 帧 obs 拼接
@@ -64,7 +64,7 @@ ENC_STD = np.tile(OBS_STD, 5).astype(np.float32)
 VEL_MEAN = np.array([0.0, 0.0, 0.0], dtype=np.float32)
 VEL_STD = np.array([1.5, 0.5, 0.5], dtype=np.float32)
 
-# actor 输入 = obs(33) + latent/privileged_vel(3) = 36
+# actor 输入 = obs(32) + latent/privileged_vel(3) = 35
 ACTOR_MEAN = np.concatenate([OBS_MEAN, VEL_MEAN]).astype(np.float32)
 ACTOR_STD = np.concatenate([OBS_STD, VEL_STD]).astype(np.float32)
 

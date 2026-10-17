@@ -24,4 +24,16 @@
   <keyframe>
     <key name="home" qpos="0 0 0.4 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0" />
   </keyframe>
+
+  <sensor>
+    <!-- DIAG: contact force sensors between excluded parent-child pairs -->
+    <!-- left chain: parent-child -->
+    <contact name="diag_left_front_parent_child" geom1="left_front_leg_geom" geom2="left_front_child1_leg_geom" data="force" reduce="netforce"/>
+    <contact name="diag_left_front_c1_c2" geom1="left_front_child1_leg_geom" geom2="left_front_leg_geom1" data="force" reduce="netforce"/>
+    <contact name="diag_left_rear_parent_child" geom1="left_rear_leg_geom1" geom2="left_rear_child1_leg_geom1" data="force" reduce="netforce"/>
+    <!-- left chain: five-bar cross-links -->
+    <contact name="diag_left_cross_c2_rear" geom1="left_front_leg_geom1" geom2="left_rear_leg_geom1" data="force" reduce="netforce"/>
+    <!-- right chain: parent-child -->
+    <contact name="diag_right_front_parent_child" geom1="right_front_leg_geom" geom2="right_front_child1_leg_geom" data="force" reduce="netforce"/>
+  </sensor>
 </mujoco>

@@ -1,7 +1,7 @@
 <mujoco model="Balance Infantry step scene">
   <include file="balance_infantry.xml"/>
 
-  <statistic center="0 0 0.3" extent="3.0"/>
+  <statistic center="0 0 0.3" extent="5.0"/>
 
   <visual>
     <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
@@ -18,26 +18,80 @@
     <material name="step2_mat" rgba="0.5 0.5 0.55 1.0"/>
     <material name="step3_mat" rgba="0.45 0.45 0.6 1.0"/>
     <material name="threshold_mat" rgba="0.75 0.65 0.35 1.0"/>
+    <material name="ring_10" rgba="0.95 0.85 0.75 1.0"/>
+    <material name="ring_11" rgba="0.90 0.82 0.72 1.0"/>
+    <material name="ring_12" rgba="0.85 0.78 0.68 1.0"/>
+    <material name="ring_13" rgba="0.80 0.74 0.65 1.0"/>
+    <material name="ring_15" rgba="0.75 0.70 0.62 1.0"/>
+    <material name="ring_16" rgba="0.70 0.66 0.58 1.0"/>
+    <material name="ring_18" rgba="0.65 0.60 0.55 1.0"/>
+    <material name="ring_19" rgba="0.60 0.58 0.54 1.0"/>
+    <material name="ring_20" rgba="0.58 0.55 0.52 1.0"/>
+    <material name="ring_22" rgba="0.55 0.50 0.52 1.0"/>
+    <material name="ring_24" rgba="0.50 0.48 0.55 1.0"/>
+    <material name="ring_25" rgba="0.45 0.45 0.62 1.0"/>
+    
   </asset>
 
   <worldbody>
-    <light pos="0 0 3.0" dir="0 0 -1" directional="true"/>
+    <light pos="0 0 4.0" dir="0 0 -1" directional="true"/>
+
     <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
-    <geom name="step1" type="box" size="2.5 2.5 0.025" pos="0 0 0.025" material="step1_mat" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
-    <geom name="step2" type="box" size="1.75 1.75 0.075" pos="0 0 0.125" material="step2_mat" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
-    <geom name="step3" type="box" size="1.0 1.0 0.11" pos="0 0 0.31" material="step3_mat" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
-    <geom name="threshold1_front"  type="box" size="2.5 0.01 0.015" pos="0 2.5 0.065" material="threshold_mat" contype="1" conaffinity="1"/>
-    <geom name="threshold1_back"   type="box" size="2.5 0.01 0.015" pos="0 -2.5 0.065" material="threshold_mat" contype="1" conaffinity="1"/>
-    <geom name="threshold1_left"   type="box" size="0.01 2.5 0.015" pos="-2.5 0 0.065" material="threshold_mat" contype="1" conaffinity="1"/>
-    <geom name="threshold1_right"  type="box" size="0.01 2.5 0.015" pos="2.5 0 0.065" material="threshold_mat" contype="1" conaffinity="1"/>
-    <geom name="threshold2_front"  type="box" size="1.75 0.01 0.015" pos="0 1.75 0.215" material="threshold_mat" contype="1" conaffinity="1"/>
-    <geom name="threshold2_back"   type="box" size="1.75 0.01 0.015" pos="0 -1.75 0.215" material="threshold_mat" contype="1" conaffinity="1"/>
-    <geom name="threshold2_left"   type="box" size="0.01 1.75 0.015" pos="-1.75 0 0.215" material="threshold_mat" contype="1" conaffinity="1"/>
-    <geom name="threshold2_right"  type="box" size="0.01 1.75 0.015" pos="1.75 0 0.215" material="threshold_mat" contype="1" conaffinity="1"/>
-    <geom name="threshold3_front"  type="box" size="1.0 0.01 0.015" pos="0 1.0 0.435" material="threshold_mat" contype="1" conaffinity="1"/>
-    <geom name="threshold3_back"   type="box" size="1.0 0.01 0.015" pos="0 -1.0 0.435" material="threshold_mat" contype="1" conaffinity="1"/>
-    <geom name="threshold3_left"   type="box" size="0.01 1.0 0.015" pos="-1.0 0 0.435" material="threshold_mat" contype="1" conaffinity="1"/>
-    <geom name="threshold3_right"  type="box" size="0.01 1.0 0.015" pos="1.0 0 0.435" material="threshold_mat" contype="1" conaffinity="1"/>
+
+    <!-- ══════════════════════════════════════════════════════
+         原始三层同心台阶 (移到 x=6 避免出生点)
+         step1: 5cm高, 5m×5m
+         step2: 15cm高, 3.5m×3.5m (累计20cm)
+         step3: 22cm高, 2m×2m     (累计42cm)
+    ══════════════════════════════════════════════════════ -->
+    <geom name="step1" type="box" size="2.5 2.5 0.025" pos="6 0 0.025" material="step1_mat" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    <geom name="step2" type="box" size="1.75 1.75 0.075" pos="6 0 0.125" material="step2_mat" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    <geom name="step3" type="box" size="1.0 1.0 0.11" pos="6 0 0.31" material="step3_mat" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+
+    <!-- 台阶层间凸起边沿 -->
+    <geom name="thr1_front"  type="box" size="2.5 0.01 0.015" pos="6  2.5 0.065" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="thr1_back"   type="box" size="2.5 0.01 0.015" pos="6 -2.5 0.065" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="thr1_left"   type="box" size="0.01 2.5 0.015" pos="3.5 0 0.065" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="thr1_right"  type="box" size="0.01 2.5 0.015" pos="8.5 0 0.065" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="thr2_front"  type="box" size="1.75 0.01 0.015" pos="6  1.75 0.215" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="thr2_back"   type="box" size="1.75 0.01 0.015" pos="6 -1.75 0.215" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="thr2_left"   type="box" size="0.01 1.75 0.015" pos="4.25 0 0.215" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="thr2_right"  type="box" size="0.01 1.75 0.015" pos="7.75 0 0.215" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="thr3_front"  type="box" size="1.0 0.01 0.015" pos="6  1.0 0.435" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="thr3_back"   type="box" size="1.0 0.01 0.015" pos="6 -1.0 0.435" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="thr3_left"   type="box" size="0.01 1.0 0.015" pos="5.0 0 0.435" material="threshold_mat" contype="1" conaffinity="1"/>
+    <geom name="thr3_right"  type="box" size="0.01 1.0 0.015" pos="7.0 0 0.435" material="threshold_mat" contype="1" conaffinity="1"/>
+
+    <!-- ══════════════════════════════════════════════════════
+         绕原点一圈的台阶 (半径 2.5m, 每 30° 一个, 1.0m×1.0m)
+         高度: 10 / 11 / 12 / 13 / 15 / 16 / 18 / 19 / 20 / 22 / 24 / 25 cm
+    ══════════════════════════════════════════════════════ -->
+    <!--   0°: 正前, 10cm -->
+    <geom name="ring_00"  type="box" size="0.50 0.50 0.05"  pos=" 2.50  0.00 0.05"  material="ring_10" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    <!--  30°: 11cm -->
+    <geom name="ring_30"  type="box" size="0.50 0.50 0.055" pos=" 2.17  1.25 0.055" material="ring_11" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    <!--  60°: 12cm -->
+    <geom name="ring_60"  type="box" size="0.50 0.50 0.06"  pos=" 1.25  2.17 0.06"  material="ring_12" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    <!--  90°: 正右, 13cm -->
+    <geom name="ring_90"  type="box" size="0.50 0.50 0.065" pos=" 0.00  2.50 0.065" material="ring_13" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    <!-- 120°: 15cm -->
+    <geom name="ring_120" type="box" size="0.50 0.50 0.075" pos="-1.25  2.17 0.075" material="ring_15" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    <!-- 150°: 16cm -->
+    <geom name="ring_150" type="box" size="0.50 0.50 0.08"  pos="-2.17  1.25 0.08"  material="ring_16" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    <!-- 180°: 正后, 18cm -->
+    <geom name="ring_180" type="box" size="0.50 0.50 0.09"  pos="-2.50  0.00 0.09"  material="ring_18" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    <!-- 210°: 19cm -->
+    <geom name="ring_210" type="box" size="0.50 0.50 0.095" pos="-2.17 -1.25 0.095" material="ring_19" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    <!-- 240°: 20cm -->
+    <geom name="ring_240" type="box" size="0.50 0.50 0.10"  pos="-1.25 -2.17 0.10"  material="ring_20" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    <!-- 270°: 正左, 22cm -->
+    <geom name="ring_270" type="box" size="0.50 0.50 0.11"  pos=" 0.00 -2.50 0.11"  material="ring_22" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    <!-- 300°: 24cm -->
+    <geom name="ring_300" type="box" size="0.50 0.50 0.12"  pos=" 1.25 -2.17 0.12"  material="ring_24" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+    <!-- 330°: 25cm -->
+    <geom name="ring_330" type="box" size="0.50 0.50 0.125" pos=" 2.17 -1.25 0.125" material="ring_25" contype="1" conaffinity="1" friction="1.0 0.005 0.0001"/>
+
+    
   </worldbody>
 
   <keyframe>

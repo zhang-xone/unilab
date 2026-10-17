@@ -26,7 +26,7 @@ class EmpiricalNormalization(nn.Module):
         self.register_buffer("_mean", torch.zeros(shape).unsqueeze(0))
         self.register_buffer("_var", torch.ones(shape).unsqueeze(0))
         self.register_buffer("_std", torch.ones(shape).unsqueeze(0))
-        self.count = 0
+        self.register_buffer("count", torch.tensor([0], dtype=torch.int64))
 
     @property
     def mean(self):
@@ -48,18 +48,37 @@ class EmpiricalNormalization(nn.Module):
 
         if self.training:
             self.update(x)
-        return (x - self._mean) / (self._std + self.eps)
+        mean = self._mean
+        std = self._std
+        if torch.any(torch.isnan(mean)) or torch.any(torch.isnan(std)) or torch.any(torch.isinf(mean)) or torch.any(torch.isinf(std)):
+            print(f"[Normalizer] NaN/Inf detected in running stats! Resetting normalizer. mean_has_nan={torch.any(torch.isnan(mean)).item()} std_has_nan={torch.any(torch.isnan(std)).item()}")
+            self._mean.zero_()
+            self._var.fill_(1.0)
+            self._std.fill_(1.0)
+            self.count.fill_(0)
+            mean = self._mean
+            std = self._std
+        return (x - mean) / (std + self.eps)
 
     @torch.jit.unused
     def update(self, x):
         """Learn input values without computing the output values of them"""
 
-        if self.until is not None and self.count >= self.until:
+        if self.until is not None and self.count.item() >= self.until:
             return
 
         count_x = x.shape[0]
+
+        nan_mask = torch.isnan(x)
+        if torch.any(nan_mask):
+            x = torch.where(nan_mask, torch.zeros_like(x), x)
+            nan_ratio = nan_mask.sum().item() / x.numel()
+            print(f"[Normalizer] Input contains NaN! ratio={nan_ratio:.4f}. Replaced with 0. Skipping stat update for safety.")
+            self.count += count_x
+            return
+
         self.count += count_x
-        rate = count_x / self.count
+        rate = count_x / self.count.item()
 
         var_x = torch.var(x, dim=0, unbiased=False, keepdim=True)
         mean_x = torch.mean(x, dim=0, keepdim=True)

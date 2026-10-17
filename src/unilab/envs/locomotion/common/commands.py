@@ -20,7 +20,12 @@ class Commands:
     initial_vel_range: list[float] = field(default_factory=lambda: [-0.2, 0.2])
     initial_yaw_range: float = 1.0
     cmd_curriculum_enabled: bool = True
+    jump_curriculum_enabled: bool = True
+    auto_jump_threshold: float = 0.0   # 测距触发自动跳跃阈值 (m)，>0 启用
+    cmd_curriculum_sustain_threshold: int = 4
+    cmd_curriculum_sustain_threshold_bad: int = 4
     height_limit: list[float] = field(default_factory=lambda: [0.28, 0.32])
+    jumph_range: list[float] = field(default_factory=lambda: [0.0, 0.3])
     resampling_time: float = 0.0
     heading_command: bool = False
     heading_range: list[float] = field(default_factory=lambda: [-3.14, 3.14])

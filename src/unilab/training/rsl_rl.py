@@ -54,7 +54,8 @@ def normalize_ppo_train_cfg(train_cfg: dict[str, Any]) -> dict[str, Any]:
     critic_hidden_dims = policy_cfg.get("critic_hidden_dims", actor_hidden_dims)
     activation = policy_cfg.get("activation", "elu")
     init_noise_std = float(policy_cfg.get("init_noise_std", 1.0))
-    obs_normalization = bool(normalized.get("empirical_normalization", False))
+    obs_normalization = bool(normalized.get("empirical_normalization",
+                            policy_cfg.get("obs_normalization", True)))
 
     normalized["actor"] = {
         "class_name": "rsl_rl.models.MLPModel",

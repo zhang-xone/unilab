@@ -43,7 +43,7 @@ algo:
 
   policy:
     init_noise_std: 1.0
-    num_encoder_obs: 165
+    num_encoder_obs: 155
     latent_dim: 3
     encoder_hidden_dims: [128, 64]
     actor_hidden_dims: [512, 256, 128]

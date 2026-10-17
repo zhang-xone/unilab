@@ -1,0 +1,53 @@
+cd /home/xxx/ubuntu_software/unilab/UniLab/src/unilab/envs/locomotion/balance_infantry
+
+# ═══════════════════════════════════════════════════════════════
+# 一键套餐: 量化 + 导出 + 测试
+# ═══════════════════════════════════════════════════════════════
+python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt --static --calib_from_sim --calib_tune --calib_samples 10000 && \
+python quantize/test_quantized.py --model quantize/2026-10-10_23-42-58_mujoco/model_3000_int8.pt --compare
+
+# ═══════════════════════════════════════════════════════════════
+# float32 → ONNX 直接导出
+# ═══════════════════════════════════════════════════════════════
+python quantize/export_onnx.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt --calib_from_sim
+python quantize/export_onnx.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-09-19_08-26-13_mujoco/model_2700.pt --calib_from_sim
+
+# ═══════════════════════════════════════════════════════════════
+# 测试 float32 原始模型
+# ═══════════════════════════════════════════════════════════════
+python quantize/test_quantized.py --model /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt --no_quantize
+python quantize/test_quantized.py --model /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-09-19_08-26-13_mujoco/model_2700.pt --no_quantize
+
+# ═══════════════════════════════════════════════════════════════
+# 动态量化
+# ═══════════════════════════════════════════════════════════════
+python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt
+python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-09-19_08-26-13_mujoco/model_2700.pt
+
+# ═══════════════════════════════════════════════════════════════
+# 静态量化 (随机校准)
+# ═══════════════════════════════════════════════════════════════
+python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt --static
+python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-09-19_08-26-13_mujoco/model_2700.pt --static
+
+# ═══════════════════════════════════════════════════════════════
+# 静态量化 + 仿真校准 + 微调 (推荐)
+# ═══════════════════════════════════════════════════════════════
+python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt --static --calib_from_sim --calib_tune
+python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-09-19_08-26-13_mujoco/model_2700.pt --static --calib_from_sim --calib_tune
+python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt --static --calib_from_sim --calib_tune
+
+# ═══════════════════════════════════════════════════════════════
+# 测试量化模型
+# ═══════════════════════════════════════════════════════════════
+python quantize/test_quantized.py --model quantize/2026-09-17_22-32-30_mujoco/model_2600_int8.pt
+python quantize/test_quantized.py --model quantize/2026-09-19_08-26-13_mujoco/model_2700_int8.pt
+
+# 对比 float32 vs int8
+python quantize/test_quantized.py --model quantize/2026-09-19_08-26-13_mujoco/model_2700_int8.pt --compare
+
+# ═══════════════════════════════════════════════════════════════
+# gyro 测试
+# ═══════════════════════════════════════════════════════════════
+cd /home/xxx/ubuntu_software/unilab/UniLab/src/unilab/envs/locomotion/balance_infantry
+uv run python test/test_gyro.py

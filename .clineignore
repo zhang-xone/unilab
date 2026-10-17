@@ -1,0 +1,9 @@
+# .clineignore
+logs/
+runs/
+*.tfevents
+*.npz
+*.csv
+*.parquet
+*.h5
+*.pkl
