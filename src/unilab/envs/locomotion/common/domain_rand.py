@@ -24,6 +24,11 @@ class DomainRandConfig:
     randomize_ground_friction: bool = False
     ground_friction_multiplier_range: list[float] = field(default_factory=lambda: [0.8, 1.2])
 
+    # 轮地接触摩擦：直接给左右轮和地面赋同一个绝对系数，避免 MuJoCo 取 max 后
+    # 下限被轮子/地面的固定值卡住。启用后覆盖 randomize_ground_friction。
+    randomize_wheel_ground_friction: bool = False
+    wheel_ground_friction_range: list[float] = field(default_factory=lambda: [0.4, 1.6])
+
     randomize_geom_solref: bool = False
     geom_solref_timeconst_range: list[float] = field(default_factory=lambda: [0.01, 0.05])
     geom_solref_dampratio_range: list[float] = field(default_factory=lambda: [0.9, 1.1])
@@ -57,6 +62,8 @@ class DomainRandConfig:
     vmc_kd_multiplier_range: list[float] = field(default_factory=lambda: [0.6, 1.4])
     randomize_vmc_ff: bool = False
     vmc_ff_multiplier_range: list[float] = field(default_factory=lambda: [0.6, 1.4])
+    randomize_vmc_pd: bool = False
+    vmc_pd_multiplier_range: list[float] = field(default_factory=lambda: [0.8, 1.2])
     randomize_wheel_kd: bool = False
     wheel_kd_multiplier_range: list[float] = field(default_factory=lambda: [0.6, 1.4])
 

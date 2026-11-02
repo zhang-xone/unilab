@@ -194,14 +194,6 @@ reward:
     # ── 惩罚 6：站立 ──────────────
     stand: -0.5
 
-    # ── 跳跃奖励（6 层） ──────────
-    takeoff_extend: 2.0
-    flight: 1.0
-    encourage_jump: 2.0
-    line_z: 2.0
-    base_height_flight: 6.0
-    leg_tuck: 2.0
-
     # ── 惩罚 5：平滑 ───────────────
     action_rate: -0.04
 
@@ -219,19 +211,8 @@ reward:
   slope_spawn_prob: 0.4              # 斜坡圈 spawn 概率
   rough_spawn_prob: 0.3             # 远处粗糙地形 spawn 概率
   # 平地概率 = 1 - slope_spawn_prob - rough_spawn_prob
-  # ── 跳跃命令 ──────────────────────
-  jump_prob: 0.1                    # 进入跳跃模式的概率（cmd_jump=1）
-  jump_crouch_height: 0.16           # 跳跃收腿高度（m）
-  jump_launch_height: 0.42           # 跳跃蹬地高度（m）
-  jump_crouch_steps: 20              # 收腿阶段步数 (0.16s)
-  jump_air_retract_steps: 20         # 空中收腿阶段步数 (0.16s)
-  jump_launch_trigger_height: 0.405   # 蹬地→收腿的高度触发阈值（h，m）
-  jump_launch_max_steps: 35           # 蹬地阶段最大步数，超时强制转入空中收腿（0.32s）
-  jump_curriculum_height_threshold: 0.03   # 高度跟踪误差 < 3cm 时认为收敛，达标后才开启跳跃
-  # ── 跳跃奖励参数 ──────────────
-  flight_height_target: 0.55        # 空中目标离地高度（m）
 
-  lift_force_max: 0.0  # 初期竖直辅助拉力(N)，随curriculum归零
+  # lift_force_max: 0.0  # 该任务 env(BalanceInfantryJoystick) 的 reward 配置没有这个字段，保留会报错
   tracking_sigma: 0.25
   tracking_sigma_lin: 0.7
   tracking_sigma_ang: 0.7
@@ -245,13 +226,17 @@ reward:
   stand_vel_weight: 1.0          # 站立惩罚中水平速度项权重
   stand_angvel_weight: 0.5       # 站立惩罚中角速度项权重
   stand_linvelz_weight: 0.5      # 站立惩罚中垂直速度项权重
-  # ── 课程渐进式终止：前期严 → 后期宽，线性映射 ──
+  # ── 终止条件 ──
+  # 注意：*_loose 三个字段目前没有代码引用（历史遗留），不生效。
+  # 课程完成后收敛终止用 term_loosen_*：生效后只剩 tilt（翻车）+ 地形出界，
+  # vertex_touch / swing / min_height 三种姿态终止关闭（命中仍计数，仅不再终止）。
+  # term_loosen_from_step 单位是控制步（每 iter = num_steps_per_env 步），0=立即。
   tilt_limit_tight: 0.349        # 20° in rad
-  tilt_limit_loose: 1.047        # 60° in rad
-  min_height_tight: 0.22          # 前期高度终止线（m），严格
-  swing_angle_limit: 0.4       # 20° in rad，前期摆角上限
-  min_height_loose: 0.14         # 后期高度终止线（m），宽松
-  swing_angle_limit_loose: 1.571  # 90° in rad，后期摆角上限，课程结束几乎不触发
+  tilt_limit_loose: 1.047        # 60° in rad（未引用）
+  min_height_tight: 0.22          # 高度终止线（m）
+  swing_angle_limit: 0.4       # 20° in rad
+  min_height_loose: 0.14         # 后期高度终止线（m）（未引用）
+  swing_angle_limit_loose: 1.571  # 90° in rad（未引用）
+  term_loosen_enabled: false
+  term_loosen_from_step: 0
   air_spawn_max_height: 0.40    # 空中出生最大高度（m），随 curriculum 从 0 渐进
-  vel_track_ratio_threshold: 0.3  # 速度跟踪比例阈值：|vx| / |cmd_vx| < 此值 → 进入终止计数
-  vel_track_min_cmd: 0.2          # 只有 |cmd_vx| > 此值时才检查速度跟踪终止

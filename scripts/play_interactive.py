@@ -98,6 +98,24 @@ from unilab.visualization.interactive_playback import (
 _KEY_ENTER, _KEY_KP_ENTER = 257, 335
 _KEY_BACKSPACE = 259
 _KEY_RIGHT, _KEY_LEFT, _KEY_DOWN, _KEY_UP = 262, 263, 264, 265
+# 下面三个是**缺省回退值**：启动时会由 _sync_jump_params_from_cfg() 用 Hydra 配置
+# 里的 commands.auto_jump_hold_time / auto_jump_threshold / auto_jump_cooldown 覆盖。
+# 改参数请改 conf/ppo_sequence/task/balance_infantry_jump_fudan_flat/mujoco.yaml。
+#
+# H 键跳跃命令保持时长（控制步）。实测一次跳跃：vz 峰值约 3 步、开始下落约 6 步、
+# 落地中位 8 步 / p90 17 步 / 最大 29 步；物理上限 vz=1.43 → 2vz/g ≈ 29 步滞空。
+# 取 40 (=0.40 s) 覆盖最长一次跳跃并留余量。
+_PLAY_JUMP_HOLD_STEPS = 40
+# 是否用"落地"提前结束 cmd_jump。
+# False = 落地不清零，只靠上面的计时器（H 按下后固定保持 0.4 s 再自动清零）。
+_PLAY_JUMP_CLEAR_ON_LANDING = False
+# 自动跳跃（J 键开关）：读模型里已有的前向测距传感器 base_height_rangefinder
+# （site 在 base 前方 _PLAY_FWD_SITE_OFFSET、zaxis=+x），测距小于阈值时发 cmd_jump=1。
+# 语义与 src/unilab/envs/locomotion/balance_infantry/quantize/test_quantized.py 一致。
+_PLAY_FWD_SITE_OFFSET = 0.30     # 传感器 site 相对机体中心的前向偏移 (m)，仅用于打印
+_PLAY_FWD_JUMP_DIST = 0.40       # 触发阈值回退值 (m)：0 < 传感器读数 < 该值 → 起跳
+_PLAY_FWD_BLIND_DIST = 2.0       # 读数大于它 = 射线已进入台阶内部（贴脸盲区）
+_PLAY_AUTO_JUMP_COOLDOWN = 100   # 起跳后冷却步数回退值（1.0 s，与 env 默认一致）
 _COMMAND_OBS_VERIFY_COMMAND = np.array([0.37, -0.23, 0.19], dtype=np.float64)
 _DEFAULT_CAMERA_DISTANCE = 2.0
 _TERRAIN_FOLLOW_CAMERA_DISTANCE = 3.0
@@ -495,9 +513,91 @@ def _resolve_focus_body_id(mj_model, env, preferred_name: str) -> int:
     return 1 if nbody > 1 else 0
 
 
+def _resolve_forward_rangefinder_adr(mj_model, env) -> int:
+    """定位模型里的前向测距传感器 ``base_height_rangefinder`` 的 sensordata 偏移。
+
+    该传感器在 robot.xml 中定义为 ``site pos="0.30 0 0" zaxis="1 0 0"``，
+    即从 base 前方 0.30 m 处沿机体 +x 打一条射线：命中返回距离，未命中返回负值。
+    找不到时返回 -1（自动跳跃测距不可用）。
+    """
+    name = "base_height_rangefinder"
+    sensor_cfg = getattr(getattr(env, "cfg", None), "sensor", None)
+    if sensor_cfg is not None and getattr(sensor_cfg, "base_height_rangefinder", None):
+        name = str(sensor_cfg.base_height_rangefinder)
+    try:
+        sid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SENSOR, name)
+    except Exception:
+        return -1
+    if sid < 0:
+        return -1
+    return int(mj_model.sensor_adr[sid])
+
+
+def _sync_jump_params_from_cfg(env: Any) -> None:
+    """把跳跃参数从 Hydra 配置同步到模块常量（配置优先，缺省回退到常量默认值）。
+
+    对应 ``CommandsCfg`` 的 ``auto_jump_threshold`` / ``auto_jump_hold_time`` /
+    ``auto_jump_cooldown``：这三个是 env 与 play 共用的业务规则，必须由配置驱动，
+    脚本不再各自硬编码一份。
+    """
+    global _PLAY_JUMP_HOLD_STEPS, _PLAY_FWD_JUMP_DIST, _PLAY_AUTO_JUMP_COOLDOWN
+    cfg = getattr(env, "cfg", None)
+    cmds = getattr(cfg, "commands", None)
+    if cmds is None:
+        return
+    ctrl_dt = float(getattr(cfg, "ctrl_dt", 0.0) or 0.01)
+    hold_t = getattr(cmds, "auto_jump_hold_time", None)
+    cd_t = getattr(cmds, "auto_jump_cooldown", None)
+    thr = getattr(cmds, "auto_jump_threshold", None)
+    if hold_t is not None:
+        _PLAY_JUMP_HOLD_STEPS = max(int(round(float(hold_t) / ctrl_dt)), 1)
+    if cd_t is not None:
+        _PLAY_AUTO_JUMP_COOLDOWN = max(int(round(float(cd_t) / ctrl_dt)), 1)
+    # auto_jump_threshold=0 在 env 里表示"关闭"，但 play 的 J 键仍需一个阈值，保持默认值。
+    if thr is not None and float(thr) > 0.0:
+        _PLAY_FWD_JUMP_DIST = float(thr)
+
+
 def _has_generated_terrain(env: Any) -> bool:
     scene = getattr(getattr(env, "cfg", None), "scene", None)
     return getattr(scene, "terrain", None) is not None
+
+
+def _make_limp_pre_step_fn(original_pre_step_fn):
+    """构造"无力模式"的 pre-step 包装：只保留**固定**的蹬腿前馈。
+
+    与训练时的无力期语义一致——关掉 PD 与轮驱，但保留沿腿方向的机械前馈，
+    模拟真实机器人断电后内部机械力把腿蹬出。没有该能力的 env（非 balance_infantry
+    任务）退回为全零力矩。
+
+    用力矩来源是 ``reward_config.powerless_feedforward_force``（N/腿），不是
+    ``_effective_vmc_ff``：后者跟 ``vmc.feedforward_force`` 绑定，默认只有 0.95 倍
+    体重，腿撑不住也蹬不出去。想蹬出来必须 > 90 N/腿（体重 180 N / 2 腿）。
+    """
+    env_obj = getattr(original_pre_step_fn, "__self__", None)
+
+    def _limp_pre_step(backend, policy_ctrl):
+        if original_pre_step_fn is not None:
+            # 只为刷新状态 / 参考量 FIFO，算出来的正常控制力矩直接丢弃
+            original_pre_step_fn(backend, policy_ctrl)
+        compute_ff = getattr(env_obj, "_compute_vmc_feedforward_torques", None)
+        if compute_ff is None:
+            return np.zeros(policy_ctrl.shape, dtype=policy_ctrl.dtype)
+        rc = getattr(getattr(env_obj, "_cfg", None), "reward_config", None)
+        pw_ff = float(getattr(rc, "powerless_feedforward_force", 0.0))
+        torques = compute_ff(pw_ff if pw_ff > 0.0 else None)
+        # 无力路径绕过了 _pre_step_motor_control 末尾的限幅，这里补上，
+        # 免得把远超执行器上限的力矩直接下发给 backend（面板也会显示假数值）。
+        lo = getattr(env_obj, "_ctrl_lower", None)
+        hi = getattr(env_obj, "_ctrl_upper", None)
+        if lo is not None and hi is not None:
+            torques = np.clip(torques, lo, hi)
+        # 同步调试用的 last_motor_ctrl，否则面板上显示的仍是正常控制力矩
+        if getattr(env_obj, "_last_motor_ctrl", None) is not None:
+            env_obj._last_motor_ctrl = np.array(torques, copy=True)
+        return torques
+
+    return _limp_pre_step
 
 
 def _default_viewer_camera_distance(mj_model, env: Any, *, follow_body: bool) -> float:
@@ -807,9 +907,9 @@ def _render_velocity_arrows(
 
 
 def _load_mujoco_model_file_for_viewer(model_file: str):
-    if Path(model_file).suffix.lower() == ".mjb":
-        return mujoco.MjModel.from_binary_path(str(model_file))
-    return mujoco.MjModel.from_xml_path(str(model_file))
+    from unilab.base.backend.mujoco.xml import load_mujoco_model_file
+
+    return load_mujoco_model_file(model_file)
 
 
 def _load_resolved_visual_viewer_model(env: Any):
@@ -1036,7 +1136,15 @@ def _print_keyboard_legend(commander: KeyboardCommander | None, env: Any = None)
     if env is not None:
         cmds = getattr(getattr(env, "state", None), "info", {}).get("commands")
         if isinstance(cmds, np.ndarray) and cmds.shape[1] >= 5:
-            print("  H            : trigger jump")
+            _jump_mode = "落地或到时清零" if _PLAY_JUMP_CLEAR_ON_LANDING else "只在到时清零"
+            _ctrl_dt = float(getattr(getattr(env, "cfg", None), "ctrl_dt", 0.01) or 0.01)
+            print(
+                f"  H            : jump (cmd_jump=1 保持 {_PLAY_JUMP_HOLD_STEPS} 步 "
+                f"≈ {_PLAY_JUMP_HOLD_STEPS * _ctrl_dt:.2f}s，{_jump_mode})"
+            )
+            print(
+                f"  J            : 自动跳跃开关 (前向测距 < {_PLAY_FWD_JUMP_DIST:.2f} m 自动跳，模拟前向测距传感器)"
+            )
     print("  M            : toggle mouse yaw (鼠标左右划控制偏航)")
     print("  Enter        : full stop")
 
@@ -1177,7 +1285,9 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
             raise
 
     try:
-        playback_cfg = _build_playback_config(args, num_envs=1)
+        num_envs = int(cfg.algo.num_envs) if (cfg is not None and OmegaConf.select(cfg, "algo.num_envs") is not None) else 1
+        playback_cfg = _build_playback_config(args, num_envs=num_envs)
+        print(f"[play_interactive] num_envs={num_envs}")
         if algo == "ppo":
             wrapper_cls = RslRlVecEnvWrapper
             if cfg is not None:
@@ -1353,11 +1463,11 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
 
     limp_mode = False
     _limp_original_pre_step_fn = env._backend._pre_step_control_fn if hasattr(env, "_backend") else None
-
-    def _limp_zero_torque_wrapper(backend, policy_ctrl):
-        if _limp_original_pre_step_fn is not None:
-            _limp_original_pre_step_fn(backend, policy_ctrl)
-        return np.zeros(policy_ctrl.shape, dtype=policy_ctrl.dtype)
+    _limp_pre_step_fn = (
+        _make_limp_pre_step_fn(_limp_original_pre_step_fn)
+        if _limp_original_pre_step_fn is not None
+        else None
+    )
 
     _x11 = None
     _x11_display = None
@@ -1428,9 +1538,9 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
         elif keycode in (ord("L"), ord("l")):
             limp_mode = not limp_mode
             if limp_mode:
-                if hasattr(env, "_backend") and _limp_original_pre_step_fn is not None:
-                    env._backend.set_pre_step_control(_limp_zero_torque_wrapper)
-                print("[play_interactive] 无力模式: ON (ctrl 直接归零)")
+                if hasattr(env, "_backend") and _limp_pre_step_fn is not None:
+                    env._backend.set_pre_step_control(_limp_pre_step_fn)
+                print("[play_interactive] 无力模式: ON (只保留重力前馈，PD/轮驱关闭)")
             else:
                 if hasattr(env, "_backend") and _limp_original_pre_step_fn is not None:
                     env._backend.set_pre_step_control(_limp_original_pre_step_fn)
@@ -1439,46 +1549,36 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
             playback_session.reset()
             commander.zero()
             print("[play_interactive] reset (backspace)")
+        elif keycode in (ord("J"), ord("j")) and env is not None:
+            env._play_auto_jump = not bool(getattr(env, "_play_auto_jump", False))
+            env._play_auto_jump_cnt = 0
+            if env._play_auto_jump:
+                print(
+                    f"[play_interactive] 自动跳跃 开启：前向测距 < {_PLAY_FWD_JUMP_DIST:.2f} m 时起跳"
+                    f"（再按 J 关闭）"
+                )
+            else:
+                print("[play_interactive] 自动跳跃 关闭")
         elif keycode in (ord("H"), ord("h")) and env is not None:
             cmds = env.state.info.get("commands")
             if isinstance(cmds, np.ndarray) and cmds.shape[1] >= 5:
-                current_jumph = float(getattr(env, "_jumph", np.zeros(1))[0])
-                if current_jumph > 0.0:
-                    env._jumph[:] = 0.0
-                    if hasattr(env, "_jump_vz_target"):
-                        env._jump_vz_target[:] = 0.0
-                    cmds[:, 4] = 0.0
-                    for attr in (
-                        "_jump_in_progress", "_jump_need_tuck", "_jump_phase",
-                    ):
-                        arr = getattr(env, attr, None)
-                        if arr is not None:
-                            arr[:] = False if attr != "_jump_phase" else 0
-                    for attr in ("_jump_phase_time", "_jump_step_counter",
-                                 "_jump_ref_vel_z", "_jump_ref_phase",
-                                 "_jump_ref_height", "_jump_ref_release_vel_z",
-                                 "_jump_push_max_vel_z",
-                                 "_jump_assist_selected"):
-                        arr = getattr(env, attr, None)
-                        if arr is not None:
-                            arr[:] = 0
-                    if hasattr(env, "_jump_debug_enter_count"):
-                        env._jump_debug_enter_count = 0
-                    print("[play_interactive] jump cancelled (H)")
-                else:
-                    rc = getattr(getattr(env, "_cfg", None), "reward_config", None)
-                    play_jumph = float(getattr(rc, "jump_height_play", 0.10))
-                    play_jumph = max(play_jumph, 0.02)
-                    env._jumph[:] = play_jumph
-                    if hasattr(env, "_jump_vz_target"):
-                        env._jump_vz_target[:] = np.sqrt(2.0 * 9.81 * play_jumph)
-                    cmds[:, 4] = play_jumph
-                    print(f"[play_interactive] jump triggered (H) jumph={play_jumph:.2f}")
+                # 直接赋值：绕过重采样 / cooldown / 质量门控。
+                # cmd_jump=1 保持 _PLAY_JUMP_HOLD_STEPS 步后自动清零；
+                # _PLAY_JUMP_CLEAR_ON_LANDING=True 时落地会提前清零（当前关闭）。
+                env._play_jump_steps = _PLAY_JUMP_HOLD_STEPS
+                env._play_was_in_flight = False
+                cmds[:, 4] = 1.0
+                print(
+                    f"[play_interactive] jump 触发 (H)：cmd_jump=1 保持 "
+                    f"{_PLAY_JUMP_HOLD_STEPS} 步 ≈ {_PLAY_JUMP_HOLD_STEPS * 0.01:.2f}s，"
+                    f"{'落地或到时清零' if _PLAY_JUMP_CLEAR_ON_LANDING else '只在到时清零（落地不清零）'}"
+                )
         elif commander is not None:
             _handle_command_key(commander, keycode)
 
     print("[play_interactive] Opening viewer — close the window or press Esc to quit.")
     print("[play_interactive] Controls: Space=pause/resume, N=single-step, +/-=speed")
+    _sync_jump_params_from_cfg(env)
     if commander is not None:
         _print_keyboard_legend(commander, env)
 
@@ -1486,6 +1586,9 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
         focus_body_id = _resolve_focus_body_id(
             mj_model, env, getattr(args, "camera_focus_body_name", "")
         )
+        _fwd_sensor_adr = _resolve_forward_rangefinder_adr(mj_model, env)
+        if _fwd_sensor_adr < 0:
+            print("[play_interactive] ⚠ 场景里没有前向测距传感器，自动跳跃测距不可用")
 
         # Initialize camera to a reasonable default and keep lookat on robot base.
         has_cam = hasattr(viewer, "cam")
@@ -1562,29 +1665,67 @@ def play_interactive(args, cfg: DictConfig | None = None, *, algo: str | None = 
 
                 playback_session.advance(controls)
 
-                # Auto-clear H-jump command on landing
-                _jumph = getattr(env, "_jumph", None)
-                if _jumph is not None and _jumph[0] > 0:
+                # H 跳跃：落地清零（仅在 _PLAY_JUMP_CLEAR_ON_LANDING=True 时生效）。
+                # 当前为 False → cmd_jump 只由 _PLAY_JUMP_HOLD_STEPS 计时器清零。
+                if _PLAY_JUMP_CLEAR_ON_LANDING and int(getattr(env, "_play_jump_steps", 0)) > 0:
                     info = playback_session.info
                     was_in_flight_arr = info.get("was_in_flight")
                     if was_in_flight_arr is not None:
-                        was_in_flight = bool(np.asarray(was_in_flight_arr).flat[0])
+                        in_air = bool(np.asarray(was_in_flight_arr).flat[0])
                         if not hasattr(env, "_play_was_in_flight"):
                             env._play_was_in_flight = False
-                        if env._play_was_in_flight and not was_in_flight:
-                            _jumph[:] = 0.0
+                        if env._play_was_in_flight and not in_air:
+                            env._play_jump_steps = 0
                             cmds_arr = info.get("commands")
                             if cmds_arr is not None and cmds_arr.shape[1] >= 5:
                                 cmds_arr[:, 4] = 0.0
-                            if hasattr(env, "_jump_in_progress"):
-                                env._jump_in_progress[:] = False
-                            print("[play_interactive] jump auto-cleared on landing")
-                        env._play_was_in_flight = was_in_flight
+                            print("[play_interactive] 落地 → cmd_jump 清零")
+                        env._play_was_in_flight = in_air
 
                 # Push env state[0] into viz_data and refresh scene
                 phys = playback_session.physics_state()[0].astype(np.float64)
                 mujoco.mj_setState(mj_model, viz_data, phys, state_spec)
                 mujoco.mj_forward(mj_model, viz_data)
+
+                # 前向测距 → 自动跳跃（语义同 quantize/test_quantized.py）
+                if env is not None and _fwd_sensor_adr >= 0:
+                    _rf = float(viz_data.sensordata[_fwd_sensor_adr])
+                    env._play_fwd_dist = _rf
+                    _cd = int(getattr(env, "_play_auto_jump_cd", 0))
+                    if _cd > 0:
+                        _cd -= 1
+                        env._play_auto_jump_cd = _cd
+                    if bool(getattr(env, "_play_auto_jump", False)):
+                        env._play_fwd_dbg = int(getattr(env, "_play_fwd_dbg", 0)) + 1
+                        if env._play_fwd_dbg % 50 == 0:
+                            if 0.0 < _rf < _PLAY_FWD_JUMP_DIST:
+                                _mark = "  ← 在触发窗口内"
+                            elif _rf < 0.0:
+                                _mark = "  ← 没命中(前方无遮挡)"
+                            elif _rf > _PLAY_FWD_BLIND_DIST:
+                                _mark = "  ← 贴脸盲区(射线已进入台阶内部)"
+                            else:
+                                _mark = "  ← 太远, 未到阈值"
+                            print(
+                                f"[play_interactive] [rf] 传感器 {_rf:+.3f} m → 机体到障碍 "
+                                f"{_rf + _PLAY_FWD_SITE_OFFSET:.3f} m{_mark}"
+                            )
+                        if (
+                            _cd == 0
+                            and int(getattr(env, "_play_jump_steps", 0)) == 0
+                            and 0.0 < _rf < _PLAY_FWD_JUMP_DIST
+                        ):
+                            _auto_cmds = playback_session.info.get("commands")
+                            if isinstance(_auto_cmds, np.ndarray) and _auto_cmds.shape[1] >= 5:
+                                env._play_jump_steps = _PLAY_JUMP_HOLD_STEPS
+                                env._play_was_in_flight = False
+                                _auto_cmds[:, 4] = 1.0
+                                env._play_auto_jump_cd = _PLAY_AUTO_JUMP_COOLDOWN
+                                print(
+                                    f"[play_interactive] 传感器 {_rf:.2f} m → 机体到障碍 "
+                                    f"{_rf + _PLAY_FWD_SITE_OFFSET:.2f} m "
+                                    f"(阈值 {_PLAY_FWD_JUMP_DIST:.2f}) → cmd_jump=1"
+                                )
 
                 if has_cam and bool(getattr(args, "camera_follow_body", True)):
                     base_pos = viz_data.xpos[focus_body_id]

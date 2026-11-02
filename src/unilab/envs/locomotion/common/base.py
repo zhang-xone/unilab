@@ -46,6 +46,10 @@ class BaseNoiseConfig:
 
 @dataclass
 class LocomotionBaseCfg(EnvCfg):
+    # reset 时在 keyframe 高度之上额外抬高的 z（m）。改这个不用重编场景 .mjb。
+    spawn_z_offset: float = 0.0
+    # reset 时初始位置在 x/y 上的均匀抖动幅度（m）。0 = 精确落在 keyframe 的 x/y。
+    spawn_xy_jitter: float = 0.5
     control_config: ControlConfigBase = field(default_factory=ControlConfigBase)
     noise_config: BaseNoiseConfig = field(default_factory=BaseNoiseConfig)
     sensor: Sensor = field(default_factory=Sensor)
@@ -66,7 +70,7 @@ class LocomotionBaseEnv(NpEnv):
         self._init_action_space()
         self._num_action = self._action_space.shape[0]
         self._init_buffers()
-        self._spawn: BaseSpawnManager = BaseSpawnManager()
+        self._spawn: BaseSpawnManager = BaseSpawnManager(z_offset=cfg.spawn_z_offset)
 
     def _init_action_space(self) -> None:
         ctrl_range = self._backend.get_actuator_ctrl_range()

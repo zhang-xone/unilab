@@ -123,3 +123,12 @@ src/unilab/assets/checkpoints/**/*.onnx
 src/unilab/assets/robots/**/tmp*.xml
 
 COD-2026RoboMaster-Balance-Simulation_File/
+node_modules
+
+# MuJoCo 预编译模型缓存（体积大，可由 _aud/build_scene_mjb.py 重新生成）
+*.mjb
+
+# RMUC2027 赛场：外部 arena 仓库的依赖与由 _aud/make_visual_scene.py 生成的派生文件
+src/unilab/assets/robots/balance_infantry/assets/rmuc2027_visual
+src/unilab/assets/robots/balance_infantry/assets/rmuc2027_visual_assets.xml
+src/unilab/assets/robots/balance_infantry/assets/rmuc2027_visual_geoms.xml

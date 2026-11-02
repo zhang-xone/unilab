@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from multiprocessing import cpu_count, current_process, get_context
+from pathlib import Path
 from typing import Any, Optional, cast
 
 import mujoco
@@ -53,31 +54,97 @@ def _root_state_dims(model) -> tuple[int, int]:
     return 0, 0
 
 
+def _model_fingerprint(model: mujoco.MjModel) -> str:
+    """Compact one-line description of the physics model.
+
+    Printed once when the pool is materialized so that a slow run can be compared
+    against a standalone benchmark without having to inspect the generated XML
+    (which lives in a temporary directory and is deleted afterwards).
+    """
+    parts = [
+        f"ngeom={model.ngeom}",
+        f"nbody={model.nbody}",
+        f"njnt={model.njnt}",
+        f"nq={model.nq}",
+        f"nv={model.nv}",
+        f"nu={model.nu}",
+        f"na={model.na}",
+        f"nsensor={model.nsensor}",
+        f"nhfield={model.nhfield}",
+    ]
+    if model.nhfield > 0:
+        parts.append(f"hfield_rows={int(model.hfield_nrow[0])}")
+    parts.extend(
+        [
+            f"dt={model.opt.timestep:g}",
+            f"iters={model.opt.iterations}",
+            f"ls_iters={model.opt.ls_iterations}",
+            f"noslip={model.opt.noslip_iterations}",
+            f"solver={int(model.opt.solver)}",
+            f"cone={int(model.opt.cone)}",
+            f"jacobian={int(model.opt.jacobian)}",
+        ]
+    )
+    return " ".join(parts)
+
+
 def _sample_solver_stats(
     model: mujoco.MjModel,
     physics_state: np.ndarray,
     num_envs: int,
     n_sample: int = 32,
-) -> tuple[float, int, float, int, float, int]:
-    """Sample ncon/nefc/niter from uniformly-spaced envs via mj_step on temp mjData."""
+) -> tuple[float, int, float, int, float, int, float, float]:
+    """Sample ncon/nefc/niter/step-cost from uniformly-spaced envs via mj_step.
+
+    ``physics_state`` uses the ``mjSTATE_FULLPHYSICS`` layout, which starts with
+    ``time``; the qpos/qvel/act blocks therefore begin at offset 1.  Timings are
+    measured on a single reused ``MjData`` so they can be compared against a
+    standalone per-env ``mj_step`` benchmark.
+    """
+    import sys
+
     indices = np.linspace(0, num_envs - 1, min(n_sample, num_envs), dtype=int)
     nq, nv, na = model.nq, model.nv, model.na
-    ncons, nefcs, niters = [], [], []
+    idx_qpos = 1
+    idx_qvel = idx_qpos + nq
+    idx_act = idx_qvel + nv
+    data = mujoco.MjData(model)
+    ncons, nefcs, niters, costs_us = [], [], [], []
+
+    def _load(i: int) -> None:
+        data.qpos[:] = physics_state[i, idx_qpos : idx_qpos + nq]
+        data.qvel[:] = physics_state[i, idx_qvel : idx_qvel + nv]
+        data.act[:] = physics_state[i, idx_act : idx_act + na]
+        data.ctrl[:] = 0.0
+        data.qacc_warmstart[:] = 0.0
+        data.time = float(physics_state[i, 0])
+
+    # Warm-up step so the first sample does not pay one-off page/cache costs.
+    _load(int(indices[0]))
+    mujoco.mj_step(model, data)
+
     for i in indices:
-        data = mujoco.MjData(model)
-        data.qpos[:nq] = physics_state[i, :nq]
-        data.qvel[:nv] = physics_state[i, nq:nq + nv]
-        data.act[:na] = physics_state[i, nq + nv:nq + nv + na]
+        _load(int(i))
+        t0 = time.perf_counter()
         mujoco.mj_step(model, data)
+        costs_us.append((time.perf_counter() - t0) * 1e6)
         ncons.append(data.ncon)
         nefcs.append(data.nefc)
         niters.append(data.solver_niter)
     ncons_a = np.array(ncons, dtype=np.float64)
     nefcs_a = np.array(nefcs, dtype=np.float64)
     niters_a = np.array(niters, dtype=np.float64)
-    return (float(ncons_a.mean()), int(ncons_a.max()),
-            float(nefcs_a.mean()), int(nefcs_a.max()),
-            float(niters_a.mean()), int(niters_a.max()))
+    costs_a = np.array(costs_us, dtype=np.float64)
+    return (
+        float(ncons_a.mean()),
+        int(ncons_a.max()),
+        float(nefcs_a.mean()),
+        int(nefcs_a.max()),
+        float(niters_a.mean()),
+        int(niters_a.max()),
+        float(costs_a.mean()),
+        float(costs_a.max()),
+    )
 
 
 @dataclass
@@ -253,7 +320,7 @@ def _build_mujoco_scene_context(scene: SceneCfg) -> _MuJoCoSceneContext:
             return _MuJoCoSceneContext(
                 model_source=scene.model_file,
                 model_file=scene.model_file,
-                visual_model_file=scene.model_file,
+                visual_model_file=scene.visual_model_file or scene.model_file,
             )
         model_source = materialize_scene_fragments(
             scene.model_file,
@@ -262,7 +329,7 @@ def _build_mujoco_scene_context(scene: SceneCfg) -> _MuJoCoSceneContext:
         return _MuJoCoSceneContext(
             model_source=model_source,
             model_file=scene.model_file,
-            visual_model_file=model_source,
+            visual_model_file=scene.visual_model_file or model_source,
             cleanup_handle=_TempXmlCleanup(model_source),
         )
 
@@ -287,7 +354,7 @@ def _build_mujoco_scene_context(scene: SceneCfg) -> _MuJoCoSceneContext:
     return _MuJoCoSceneContext(
         model_source=model,
         model_file=scene.model_file,
-        visual_model_file=os.path.join(output_dir.name, "scene.xml"),
+        visual_model_file=scene.visual_model_file or os.path.join(output_dir.name, "scene.xml"),
         artifacts_dir=output_dir.name,
         terrain_origins=terrain_origins,
         terrain_surface_sampler=terrain_surface_sampler,
@@ -345,7 +412,7 @@ class MuJoCoBackend(SimBackend):
         self._pending_xfrc_applied = np.zeros((num_envs, 6 * self._model.nbody), dtype=np.float64)
 
         # Thread configuration.
-        self._n_threads = min(num_envs, cpu_count() * 2)
+        self._n_threads = min(num_envs, max(1, cpu_count()))
 
         self._model_variants: tuple[mujoco.MjModel, ...] = (self._model,)
         self._model_assignments = np.zeros((num_envs,), dtype=np.int32)
@@ -463,7 +530,22 @@ class MuJoCoBackend(SimBackend):
 
         model_path, tmp_paths, tracked_body_ids, valid_bnames = self._prepare_model_xml()
         try:
-            model = mujoco.MjModel.from_xml_path(model_path)
+            # 若同目录下存在比源 XML 更新的预编译模型 (.mjb)，直接读取，跳过耗时编译。
+            # 大网格场景(如 RMUC 赛场 3.8 万碰撞体)首次编译需数分钟，.mjb 读取是毫秒级。
+            # 生成方式见 _aud/build_scene_mjb.py；没有 .mjb 时行为完全不变。
+            # 注意: self._model_file 可能是 materialize 后的临时场景(拼接了地形/fragment)，
+            # 不能拿它做缓存键；用配置里的原始 scene_model_file，并且只在两者相同时启用缓存。
+            cand = Path(str(self.scene_model_file))
+            mjb_path = cand.with_suffix(".mjb")
+            same_source = Path(str(self._model_file)) == cand
+            if (
+                same_source
+                and mjb_path.exists()
+                and mjb_path.stat().st_mtime >= cand.stat().st_mtime
+            ):
+                model = mujoco.MjModel.from_binary_path(str(mjb_path))
+            else:
+                model = mujoco.MjModel.from_xml_path(model_path)
         finally:
             for tmp_path in reversed(tmp_paths):
                 os.remove(tmp_path)
@@ -621,6 +703,11 @@ class MuJoCoBackend(SimBackend):
             model_sequence,
             nbatch=self._num_envs,
             nthread=self._n_threads,
+        )
+        print(
+            f"[mujoco] pool materialized: envs={self._num_envs} nthread={self._n_threads} "
+            f"{_model_fingerprint(self._model)}",
+            flush=True,
         )
         sensor_init = pool.forward(self._physics_state)
         self._sensor_data[:] = sensor_init.astype(self._np_dtype)
@@ -891,6 +978,8 @@ class MuJoCoBackend(SimBackend):
         refresh_cache_ms = 0.0
         has_pending_xfrc = bool(np.any(self._pending_xfrc_applied))
 
+        _ss_pool_ms = []
+        _cpu_pool_ms = []
         for _ in range(nsteps):
             t0 = time.perf_counter()
             native_ctrl = self._apply_pre_step_control(ctrl)
@@ -902,6 +991,7 @@ class MuJoCoBackend(SimBackend):
                 control_traj = np.concatenate((control_traj, xfrc_traj), axis=-1)
             set_ctrl_ms += (time.perf_counter() - t0) * 1000.0
 
+            cpu_t0 = os.times()
             t_pool = time.perf_counter()
             state_np, sensor_np = self._pool.step(  # type: ignore[union-attr]
                 self._physics_state,
@@ -911,7 +1001,11 @@ class MuJoCoBackend(SimBackend):
                 return_sensor=True,
                 post_step_forward_sensor=self._post_step_forward_sensor,
             )
-            pool_step_ms += (time.perf_counter() - t_pool) * 1000.0
+            _ss_ms = (time.perf_counter() - t_pool) * 1000.0
+            cpu_t1 = os.times()
+            _ss_pool_ms.append(_ss_ms)
+            _cpu_pool_ms.append((cpu_t1.user + cpu_t1.system - cpu_t0.user - cpu_t0.system) * 1000.0)
+            pool_step_ms += _ss_ms
 
             t_copy = time.perf_counter()
             self._physics_state[:] = state_np.astype(self._np_dtype)
@@ -924,12 +1018,19 @@ class MuJoCoBackend(SimBackend):
         if has_pending_xfrc:
             self._pending_xfrc_applied.fill(0.0)
 
+        _substep_detail = "/".join(f"{x:.1f}" for x in _ss_pool_ms)
+        _total_ss = sum(_ss_pool_ms)
+        _total_cpu = sum(_cpu_pool_ms)
+
         physics_ms = pool_step_ms + state_copy_ms
 
         return {
             "timing": {
                 "set_ctrl_ms": set_ctrl_ms,
                 "pool_step_ms": pool_step_ms,
+                "pool_substeps": _substep_detail,
+                "pool_cpu_ms": _total_cpu,
+                "pool_cpu_ratio": round(_total_cpu / _total_ss, 2) if _total_ss > 0 else 0,
                 "state_copy_ms": state_copy_ms,
                 "physics_ms": physics_ms,
                 "refresh_cache_ms": refresh_cache_ms,

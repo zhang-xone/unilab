@@ -21,3 +21,6 @@ class SceneCfg:
     model_file: str
     fragment_files: list[str] = field(default_factory=list)
     terrain: TerrainSceneCfg | None = None
+    # 渲染专用场景(可选)。物理用 model_file，看视频用这个，可大幅降低 draw call。
+    # 不设置时沿用 model_file，行为与之前一致。
+    visual_model_file: str | None = None

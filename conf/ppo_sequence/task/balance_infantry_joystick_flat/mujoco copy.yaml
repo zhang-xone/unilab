@@ -245,7 +245,7 @@ reward:
   # ── 跳跃奖励参数 ──────────────
   flight_height_target: 0.55        # 空中目标离地高度（m）
 
-  lift_force_max: 0.0  # 初期竖直辅助拉力(N)，随curriculum归零
+  
   tracking_sigma: 0.25
   tracking_sigma_lin: 0.25
   tracking_sigma_ang: 0.25
@@ -261,9 +261,14 @@ reward:
   stand_angvel_weight: 0.5       # 站立惩罚中角速度项权重
   stand_linvelz_weight: 0.5      # 站立惩罚中垂直速度项权重
   # ── 终止条件 ──
-  tilt_limit_tight: 1.0
+  tilt_limit_tight: 1.4706    # ≈84.3°，与复旦 projected_gravity_z > -0.1 等价
   swing_angle_limit: 1.0
   min_height_tight: 0.10
+  # 课程完成后的终止收敛：生效后只剩 tilt（翻车）终止 + 地形出界，
+  # vertex_touch / swing / min_height 三种姿态终止关闭（命中仍计数，仅不再终止）。
+  # from_step 是控制步（每 iter = num_steps_per_env=48 步）：48000≈1000 iter，96000≈2000 iter，0=立即。
+  term_loosen_enabled: true
+  term_loosen_from_step: 0
   air_spawn_max_height: 0.40    # 空中出生最大高度（m），随 curriculum 从 0 渐进
   vel_track_ratio_threshold: 0.3  # 速度跟踪比例阈值：|vx| / |cmd_vx| < 此值 → 进入终止计数
   vel_track_min_cmd: 0.2          # 只有 |cmd_vx| > 此值时才检查速度跟踪终止

@@ -441,8 +441,11 @@ def _inject_box_geoms(root: ET.Element, box_geoms: list, cylinder_geoms: list | 
                 "type": "box",
                 "size": _format_values(list(bg.size)),
                 "pos": _format_values(list(bg.pos)),
-                "contype": "2",
-                "conaffinity": "2",
+                # 1/1 matches the hfield geom and the hand-written step geoms in
+                # scene_step.xml. With 2/2 only geoms whose masks contain bit 2 collided
+                # (balance_infantry wheels are 7/3), so legs (1/1) and body fell through.
+                "contype": "1",
+                "conaffinity": "1",
                 "friction": _format_values(list(bg.friction)),
             }
             if bg.material_rgba:
@@ -467,8 +470,8 @@ def _inject_box_geoms(root: ET.Element, box_geoms: list, cylinder_geoms: list | 
                 "type": "cylinder",
                 "size": size_str,
                 "pos": _format_values(list(cg.pos)),
-                "contype": "2",
-                "conaffinity": "2",
+                "contype": "1",
+                "conaffinity": "1",
                 "friction": _format_values(list(cg.friction)),
             }
             if cg.quat != (1.0, 0.0, 0.0, 0.0):
@@ -690,3 +693,24 @@ def add_sensor(root, sensor_type, name, **kwargs):
         sensor.set(key, str(value))
 
     return sensor
+
+
+def load_mujoco_model_file(model_file: str | Path):
+    """加载 MuJoCo 模型，优先使用同目录下更新的预编译 ``.mjb`` 缓存。
+
+    大网格场景（如 RMUC 赛场，5 万+ 碰撞体）首次 ``from_xml_path`` 需要数分钟，
+    而 ``from_binary_path`` 读取只要零点几秒。约定：同目录下与 XML 同名的 ``.mjb``
+    如果比 XML 新，就直接读取它。没有 ``.mjb`` 时行为与直接调用 ``from_xml_path``
+    完全一致。
+
+    ``.mjb`` 可由 ``_aud/build_scene_mjb.py`` 生成；改了场景几何后删掉它重新生成即可。
+    """
+    import mujoco
+
+    path = Path(str(model_file))
+    if path.suffix.lower() == ".mjb":
+        return mujoco.MjModel.from_binary_path(str(path))
+    cached = path.with_suffix(".mjb")
+    if cached.exists() and cached.stat().st_mtime >= path.stat().st_mtime:
+        return mujoco.MjModel.from_binary_path(str(cached))
+    return mujoco.MjModel.from_xml_path(str(path))

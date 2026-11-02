@@ -174,6 +174,11 @@ class BalanceRewardConfig:
     tilt_limit_tight: float = 20.0 * np.pi / 180.0
     swing_angle_limit: float = 45.0 * np.pi / 180.0  # 摆角 θ 过大终止
     min_height_tight: float = 0.22          # 高度终止线（m）
+    # ── 课程完成后的终止收敛：完成后只剩 tilt（翻车）终止 ──
+    # 届时关闭 vertex_touch / swing / height 三种姿态终止，只保留 tilt > tilt_limit_tight
+    # 与地形出界（防止掉出地形后无限下坠）。tilt_limit_tight 本身不变。
+    term_loosen_enabled: bool = False
+    term_loosen_from_step: int = 0           # 生效的控制步（每 iter = num_steps_per_env 步）；0=立即
     air_spawn_max_height: float = 0.40       # 空中出生最大高度（m），随 curriculum scale 从 0 渐进至此值
     n_steps_delay: int = 50
     powerless_duration: float = 1.0  # reset 后无力时长（秒），期间扭矩=0/奖励=0/不终止
@@ -1188,6 +1193,7 @@ class BalanceInfantryJoystickEnv(BalanceInfantryBaseEnv):
         self._term_tilt = 0
         self._term_height_low = 0
         self._term_swing = 0
+        self._term_loosened = False
         self._term_vel_track = 0
         self._total_steps = 0
         self._term_window_steps = 0
@@ -1594,8 +1600,8 @@ class BalanceInfantryJoystickEnv(BalanceInfantryBaseEnv):
         pitch = np.arcsin(np.clip(gravity_body[:, 0], -1.0, 1.0))
 
         self._vmc_theta_dot = -self._vmc_phi0_dot - pitch_dot[:, np.newaxis]
-        self._theta_vmc_l = np.pi / 2 - self._vmc_phi0[:, 0] - pitch
-        self._theta_vmc_r = np.pi / 2 - self._vmc_phi0[:, 1] - pitch
+        self._theta_vmc_l = (np.pi / 2 - self._vmc_phi0[:, 0] + pitch + np.pi) % (2.0 * np.pi) - np.pi
+        self._theta_vmc_r = (np.pi / 2 - self._vmc_phi0[:, 1] + pitch + np.pi) % (2.0 * np.pi) - np.pi
     def _compute_vmc_torques(self, backend: Any) -> np.ndarray:
         """纯 VMC 重力前馈: mg/cos(θ) → 雅可比映射 → 关节力矩。
 
@@ -1904,7 +1910,7 @@ class BalanceInfantryJoystickEnv(BalanceInfantryBaseEnv):
             "action_smooth": self._reward_action_smooth,
             "dof_vel": self._reward_dof_vel,
             "dof_acc": common_rewards.dof_acc,
-            "torques": common_rewards.torques,
+            "torques": common_rewards.dof_torques_l2,
             # ── Balance 特有：
             # ——速度追踪奖励 ——————————————————
             "tracking_lin_vel": self._reward_tracking_lin_vel,
@@ -2157,11 +2163,10 @@ class BalanceInfantryJoystickEnv(BalanceInfantryBaseEnv):
         """
         commands = ctx.info["commands"]
         vx = ctx.info["body_vx"]
-        vy = ctx.info["body_vy"]
         gravity_body = ctx.info["gravity_body"]
         cos_pitch = np.cos(np.arcsin(np.clip(gravity_body[:, 0], -1.0, 1.0)))
         vx_horiz = vx * cos_pitch
-        lin_vel_error = np.square(commands[:, 0] - vx_horiz) + np.square(commands[:, 1] - vy)
+        lin_vel_error = np.square(commands[:, 0] - vx_horiz)
         sigma_base = ctx.tracking_sigma_lin if ctx.tracking_sigma_lin is not None else ctx.tracking_sigma
         sigma_dyn = np.maximum(sigma_base * sigma_base, sigma_base * np.square(commands[:, 0]))
         sigma = sigma_dyn if ctx.tracking_sigma_dynamic else np.minimum(sigma_dyn, sigma_base)
@@ -2187,11 +2192,10 @@ class BalanceInfantryJoystickEnv(BalanceInfantryBaseEnv):
         """精度加强版线速度追踪：σ = 原 σ / 10，对微小误差更敏感。"""
         commands = ctx.info["commands"]
         vx = ctx.info["body_vx"]
-        vy = ctx.info["body_vy"]
         gravity_body = ctx.info["gravity_body"]
         cos_pitch = np.cos(np.arcsin(np.clip(gravity_body[:, 0], -1.0, 1.0)))
         vx_horiz = vx * cos_pitch
-        lin_vel_error = np.square(commands[:, 0] - vx_horiz) + np.square(commands[:, 1] - vy)
+        lin_vel_error = np.square(commands[:, 0] - vx_horiz)
         sigma_base = (ctx.tracking_sigma_lin if ctx.tracking_sigma_lin is not None else ctx.tracking_sigma) / 10.0
         sigma_dyn = np.maximum(sigma_base * sigma_base, sigma_base * np.square(commands[:, 0]))
         sigma = sigma_dyn if ctx.tracking_sigma_dynamic else np.minimum(sigma_dyn, sigma_base)
@@ -2206,11 +2210,10 @@ class BalanceInfantryJoystickEnv(BalanceInfantryBaseEnv):
         """
         commands = ctx.info["commands"]
         vx = ctx.info["body_vx"]
-        vy = ctx.info["body_vy"]
         gravity_body = ctx.info["gravity_body"]
         cos_pitch = np.cos(np.arcsin(np.clip(gravity_body[:, 0], -1.0, 1.0)))
         vx_horiz = vx * cos_pitch
-        lin_vel_error = np.square(commands[:, 0] - vx_horiz) + np.square(commands[:, 1] - vy)
+        lin_vel_error = np.square(commands[:, 0] - vx_horiz)
         return np.asarray(lin_vel_error, dtype=get_global_dtype())
 
     def _reward_tracking_ang_vel_precise(self, ctx: RewardContext) -> np.ndarray:
@@ -3056,6 +3059,25 @@ class BalanceInfantryJoystickEnv(BalanceInfantryBaseEnv):
         """保留兼容接口，实际不再使用传感器数据。"""
         return rw, lw
 
+    def _term_loosen_active(self, rc: Any) -> bool:
+        """课程完成后是否收敛终止：True 时只剩 tilt（翻车）+ 地形出界终止。
+
+        ``term_loosen_from_step`` 用控制步计数（``self.step_counter``，每 iter =
+        ``num_steps_per_env`` 步；0 = 立即生效）。首次生效打印一次，便于在日志里定位切换点。
+        """
+        if not getattr(rc, "term_loosen_enabled", False):
+            return False
+        active = int(self.step_counter) >= int(getattr(rc, "term_loosen_from_step", 0))
+        if active and not self._term_loosened:
+            self._term_loosened = True
+            print(
+                f"[TERM] 课程完成收敛 step={int(self.step_counter)} → 只保留 tilt 终止："
+                f"tilt>{float(rc.tilt_limit_tight):.3f}rad"
+                f"（vertex_touch / swing / min_height 三种姿态终止已关闭，地形出界仍生效）",
+                flush=True,
+            )
+        return active
+
     def _detect_termination(self, gravity_body: np.ndarray, base_pos: np.ndarray, base_body_contact_force: np.ndarray, commands: np.ndarray, upvector: np.ndarray, local_linvel: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         rc = self._cfg.reward_config
         tilt = np.arccos(np.clip(gravity_body[:, 2], 0.0, 1.0))
@@ -3075,10 +3097,12 @@ class BalanceInfantryJoystickEnv(BalanceInfantryBaseEnv):
         max_swing = np.maximum(np.abs(self._theta_vmc_l), np.abs(self._theta_vmc_r))
         swing_too_high = (max_swing > rc.swing_angle_limit) & ~powerless_mask
 
-        self._vertex_touch_count = np.where(vertex_touch, self._vertex_touch_count + 1, 0)
+        # 课程完成收敛：只剩 tilt 终止；命中计数照常记录，用于 [term] 诊断
+        loosen_mask = np.bool_(self._term_loosen_active(rc))
+        self._vertex_touch_count = np.where(vertex_touch & ~loosen_mask, self._vertex_touch_count + 1, 0)
         self._tilt_count = np.where(body_tilt_too_high, self._tilt_count + 1, 0)
-        self._height_low_count = np.where(height_collapse, self._height_low_count + 1, 0)
-        self._swing_count = np.where(swing_too_high, self._swing_count + 1, 0)
+        self._height_low_count = np.where(height_collapse & ~loosen_mask, self._height_low_count + 1, 0)
+        self._swing_count = np.where(swing_too_high & ~loosen_mask, self._swing_count + 1, 0)
 
         # ── 速度跟踪终止：|vx| / |cmd_vx| < vel_track_ratio_threshold 且 |cmd_vx| > vel_track_min_cmd ──
         cmd_vx = commands[:, 0]
@@ -3309,7 +3333,7 @@ class BalanceInfantryJoystickEnv(BalanceInfantryBaseEnv):
         rc = self._cfg.reward_config
         s = rc.scales
         sigma_lin = self._curriculum.tracking_sigma_lin
-        lin_vel_error = np.square(commands[:, 0] - local_linvel[:, 0]) + np.square(commands[:, 1] - local_linvel[:, 1])
+        lin_vel_error = np.square(commands[:, 0] - local_linvel[:, 0])
         sigma = np.maximum(sigma_lin * sigma_lin, sigma_lin * np.square(commands[:, 0]))
 
         tracking_total = s["tracking_lin_vel"] * np.exp(-lin_vel_error / sigma)
@@ -3592,7 +3616,7 @@ class BalanceInfantryJoystickEnv(BalanceInfantryBaseEnv):
         vmc_T_l = float(np.mean(self._vmc_T[:, 0]))
         print(f"  [torque] rms={float(np.sqrt(np.mean(np.sum(np.square(torques), axis=1)))):+.2f}  rw={float(np.mean(np.abs(torques[:, 5]))):+.2f}  lw={float(np.mean(np.abs(torques[:, 4]))):+.2f}  R_leg={float(np.mean(np.abs(torques[:, 1]))):+.2f}/{float(np.mean(np.abs(torques[:, 3]))):+.2f}  L_leg={float(np.mean(np.abs(torques[:, 0]))):+.2f}/{float(np.mean(np.abs(torques[:, 2]))):+.2f}")
         print(f"  [VMC]   F=({vmc_F_l:+.1f},{vmc_F_r:+.1f})N  T=({vmc_T_l:+.1f},{vmc_T_r:+.1f})N·m")
-        print(f"  [term]  rate={((self._term_vertex + self._term_tilt + self._term_height_low + self._term_swing + self._term_vel_track) / max(self._term_window_steps, 1) * 1000):.1f}/1k  touch={self._hit_vertex / max(self._term_window_steps, 1) * 1000:.0f}  tilt={self._hit_tilt / max(self._term_window_steps, 1) * 1000:.0f}  h_low={self._hit_height_low / max(self._term_window_steps, 1) * 1000:.0f}  swing={self._hit_swing / max(self._term_window_steps, 1) * 1000:.0f}  vel={self._hit_vel_track / max(self._term_window_steps, 1) * 1000:.0f}  body_contact_force={float(np.mean(base_body_contact_force)):.2f}({float(np.max(base_body_contact_force)):.2f})  base_h={base_h_mean:.3f}")
+        print(f"  [term]  mode={'tilt_only' if self._term_loosened else 'full'}  rate={((self._term_vertex + self._term_tilt + self._term_height_low + self._term_swing + self._term_vel_track) / max(self._term_window_steps, 1) * 1000):.1f}/1k  touch={self._hit_vertex / max(self._term_window_steps, 1) * 1000:.0f}  tilt={self._hit_tilt / max(self._term_window_steps, 1) * 1000:.0f}  h_low={self._hit_height_low / max(self._term_window_steps, 1) * 1000:.0f}  swing={self._hit_swing / max(self._term_window_steps, 1) * 1000:.0f}  vel={self._hit_vel_track / max(self._term_window_steps, 1) * 1000:.0f}  body_contact_force={float(np.mean(base_body_contact_force)):.2f}({float(np.max(base_body_contact_force)):.2f})  base_h={base_h_mean:.3f}")
         print(f"  [info]  step={int(self._episode_steps.mean())}  total={self._total_steps}  cur={self._curriculum.scale:.2f}  vx_range=[{float(self._curriculum.cmd_vel_range[0, 0]):+.2f},{float(self._curriculum.cmd_vel_range[0, 1]):+.2f}]  yaw_range=[{float(self._curriculum.cmd_yaw_range[0]):+.2f},{float(self._curriculum.cmd_yaw_range[1]):+.2f}]  σ_ang={self._curriculum.tracking_sigma_ang:.2f}  σ_yaw={self._curriculum.tracking_sigma_yaw:.2f}"
               )
         if hasattr(self, '_spawn'):

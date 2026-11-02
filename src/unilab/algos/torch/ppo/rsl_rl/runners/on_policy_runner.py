@@ -45,6 +45,37 @@ from unilab.algos.torch.ppo.rsl_rl.modules import (
 from unilab.algos.torch.ppo.rsl_rl.env import VecEnv
 
 
+def drop_shape_mismatched_keys(model_dict, current_state, *, allow_shape_mismatch: bool = False):
+    """检查 checkpoint 与当前模型 state_dict 的 shape 是否一致。
+
+    shape 不一致通常意味着 env 配置变了（例如 terrain_scan / 观测布局），
+    静默丢弃这些权重会让 critic 重新初始化、价值估计失效，且 optimizer 也会被跳过。
+    默认直接报错；只有显式 ``allow_shape_mismatch=True`` 才允许丢弃。
+    """
+    mismatched = {}
+    for key in list(model_dict.keys()):
+        if key in current_state and model_dict[key].shape != current_state[key].shape:
+            mismatched[key] = (tuple(model_dict[key].shape), tuple(current_state[key].shape))
+
+    if mismatched and not allow_shape_mismatch:
+        detail = "\n".join(
+            f"  {key}: checkpoint {ckpt_shape} vs model {model_shape}"
+            for key, (ckpt_shape, model_shape) in sorted(mismatched.items())
+        )
+        raise RuntimeError(
+            "checkpoint 与当前模型维度不一致（通常是 env 配置变了，"
+            "例如 terrain_scan / 观测布局）：\n"
+            f"{detail}\n"
+            "这样加载会丢掉这些权重（critic 会被重新初始化），因此默认失败。\n"
+            "确认要这样做时，显式传 allow_shape_mismatch=True"
+            "（续训脚本可用 UNILAB_ALLOW_SHAPE_MISMATCH=1）。"
+        )
+
+    for key in mismatched:
+        del model_dict[key]
+    return mismatched
+
+
 class OnPolicyRunner:
 
     def __init__(self, env: VecEnv, train_cfg, log_dir=None, device="cpu"):
@@ -312,7 +343,7 @@ class OnPolicyRunner:
             path,
         )
 
-    def load(self, path, load_optimizer=True):
+    def load(self, path, load_optimizer=True, allow_shape_mismatch=False):
         loaded_dict = torch.load(path)
         model_dict = loaded_dict["model_state_dict"]
 
@@ -325,12 +356,12 @@ class OnPolicyRunner:
                     print(f"[LOAD] Converted {key}: {old.shape} -> {model_dict[key].shape}")
 
         current_state = self.alg.actor_critic.state_dict()
-        had_mismatch = False
-        for key in list(model_dict.keys()):
-            if key in current_state and model_dict[key].shape != current_state[key].shape:
-                print(f"[LOAD] Mismatched size for {key}: {model_dict[key].shape} vs {current_state[key].shape}, skipping.")
-                del model_dict[key]
-                had_mismatch = True
+        mismatched = drop_shape_mismatched_keys(
+            model_dict, current_state, allow_shape_mismatch=allow_shape_mismatch
+        )
+        had_mismatch = bool(mismatched)
+        for key, (ckpt_shape, model_shape) in mismatched.items():
+            print(f"[LOAD] Mismatched size for {key}: {ckpt_shape} vs {model_shape}, dropped.")
         missing, unexpected = self.alg.actor_critic.load_state_dict(model_dict, strict=False)
         if missing:
             print(f"[LOAD] WARNING: missing keys: {missing}")

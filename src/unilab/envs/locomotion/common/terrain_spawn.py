@@ -22,6 +22,10 @@ import numpy as np
 class BaseSpawnManager:
     """Default no-op spawn manager: returns zeros, records nothing."""
 
+    def __init__(self, z_offset: float = 0.0) -> None:
+        # 在 keyframe 高度统一抬高的 z（m）。0 表示完全按 keyframe。
+        self.z_offset = float(z_offset)
+
     def origins_for(self, env_ids: np.ndarray) -> np.ndarray:
         return np.zeros((env_ids.shape[0], 3), dtype=np.float64)
 
@@ -33,7 +37,11 @@ class BaseSpawnManager:
         yaw: np.ndarray | None = None,
     ) -> np.ndarray:
         del yaw
-        return np.asarray(qpos_xyz, dtype=np.float64) + self.origins_for(env_ids)
+        out = np.asarray(qpos_xyz, dtype=np.float64) + self.origins_for(env_ids)
+        if self.z_offset:
+            out = out.copy()
+            out[:, 2] += self.z_offset
+        return out
 
     def record_episode_start(self, env_ids: np.ndarray, qpos_xyz: np.ndarray) -> None:
         del env_ids, qpos_xyz

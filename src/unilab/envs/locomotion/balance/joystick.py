@@ -172,8 +172,6 @@ class BalanceRewardConfig:
     jump_vz_target: float = 2.0       # 蹬地目标向上速度（m/s）
     jump_vz_sigma: float = 1.0        # 蹬地速度奖励的高斯 σ（m/s）
     jump_curriculum_height_threshold: float = 0.03  # 高度跟踪误差 < 此值时认为收敛，达标后才开启跳跃
-    vel_track_ratio_threshold: float = 0.3  # 速度跟踪比例阈值：|vx_actual| / |cmd_vx| < 此值 → 进入终止计数
-    vel_track_min_cmd: float = 0.2  # 只有 |cmd_vx| > 此值时才检查速度跟踪终止
 
 
 @dataclass(kw_only=True)
@@ -737,7 +735,6 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         # 延迟终止 / 差分加速度所需缓冲
         self._vertex_touch_count = np.zeros(num_envs, dtype=np.int32)
         self._tilt_count = np.zeros(num_envs, dtype=np.int32)
-        self._vel_track_count = np.zeros(num_envs, dtype=np.int32)
         self._last_dof_vel_for_acc = np.zeros((num_envs, NUM_BALANCE_ACTIONS), dtype=self._np_dtype)
         self._last_rw_body = None   
         self._last_lw_body = None
@@ -746,12 +743,10 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         self._powerless_active = np.zeros(num_envs, dtype=bool)
         self._term_vertex = 0
         self._term_tilt = 0
-        self._term_vel_track = 0
         self._total_steps = 0
         self._term_window_steps = 0
         self._hit_vertex = 0
         self._hit_tilt = 0
-        self._hit_vel_track = 0
 
         self._episode_vel_sum = np.zeros(num_envs, dtype=self._np_dtype)
         self._episode_cmd_vel_sum = np.zeros(num_envs, dtype=self._np_dtype)
@@ -883,7 +878,6 @@ class BalanceJoystickEnv(BalanceBaseEnv):
 
         self._vertex_touch_count[env_ids] = 0
         self._tilt_count[env_ids] = 0
-        self._vel_track_count[env_ids] = 0
         self._last_dof_vel_for_acc[env_ids] = 0.0
         self._last_motor_ctrl[env_ids] = 0.0
         cur_n = getattr(self, "_last_rw_body", None)
@@ -947,7 +941,7 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         height_ok = height_err_mean < height_th
 
         good = (fwd_ratio > 0.7) & (bwd_ratio > 0.7) & posture_ok
-        bad = ((fwd_ratio < 0.3) | (bwd_ratio < 0.3)) & posture_ok
+        bad = ((fwd_ratio < 0.4) | (bwd_ratio < 0.4)) & posture_ok
         self._curriculum_good_accum += float(np.sum(good))
         self._curriculum_bad_accum += float(np.sum(bad))
         self._curriculum_episode_count += len(env_ids)
@@ -2185,22 +2179,9 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         self._vertex_touch_count = np.where(vertex_touch, self._vertex_touch_count + 1, 0)
         self._tilt_count = np.where(body_tilt_too_high, self._tilt_count + 1, 0)
 
-        # ── 速度跟踪终止：|vx| / |cmd_vx| < vel_track_ratio_threshold 且 |cmd_vx| > vel_track_min_cmd ──
-        cmd_vx = commands[:, 0]
-        vx = local_linvel[:, 0]
-        vel_track_ratio_threshold = float(getattr(rc, "vel_track_ratio_threshold", 0.3))
-        vel_track_min_cmd = float(getattr(rc, "vel_track_min_cmd", 0.2))
-        vel_track_poor = (
-            (np.abs(cmd_vx) > vel_track_min_cmd)
-            & (np.abs(vx) / (np.abs(cmd_vx) + 1e-6) < vel_track_ratio_threshold)
-            & ~powerless_mask
-        )
-        self._vel_track_count = np.where(vel_track_poor, self._vel_track_count + 1, 0)
-
         terminated = (
             (self._vertex_touch_count >= rc.n_steps_delay)
             | (self._tilt_count >= rc.n_steps_delay)
-            | (self._vel_track_count >= rc.n_steps_delay)
         ) & ~powerless_mask
 
         if self._cfg.termination_config.terrain_out_of_bounds:
@@ -2218,17 +2199,15 @@ class BalanceJoystickEnv(BalanceBaseEnv):
         self._term_window_steps += n_envs
         self._hit_vertex += int(np.sum(vertex_touch))
         self._hit_tilt += int(np.sum(body_tilt_too_high))
-        self._hit_vel_track += int(np.sum(vel_track_poor))
 
         if np.any(terminated):
             self._term_vertex += int(np.sum((self._vertex_touch_count >= rc.n_steps_delay) & terminated))
             self._term_tilt += int(np.sum((self._tilt_count >= rc.n_steps_delay) & terminated))
-            self._term_vel_track += int(np.sum((self._vel_track_count >= rc.n_steps_delay) & terminated))
 
         if self._term_window_steps >= 200 * n_envs:
-            self._term_vertex = self._term_tilt = self._term_vel_track = 0
+            self._term_vertex = self._term_tilt = 0
             self._term_window_steps = 0
-            self._hit_vertex = self._hit_tilt = self._hit_vel_track = 0
+            self._hit_vertex = self._hit_tilt = 0
 
         return tilt, body_vertex_z, terminated
 
@@ -2608,8 +2587,8 @@ class BalanceJoystickEnv(BalanceBaseEnv):
               f"  lw_torque="f"{float(np.mean(np.abs(torques[:, 5]))):+.3f}N·m"
               f"  r_leg_torque="f"{float(np.mean(np.abs(torques[:, 0]))):+.3f}/"f"{float(np.mean(np.abs(torques[:, 1]))):+.3f}"
               f"  l_leg_torque="f"{float(np.mean(np.abs(torques[:, 3]))):+.3f}/"f"{float(np.mean(np.abs(torques[:, 4]))):+.3f}"
-              f"  term_rate="f"{(self._term_vertex + self._term_tilt + self._term_vel_track) / max(self._term_window_steps, 1) * 1000:.1f}/1000step"
-              f"  hit(touch/tilt/vel)/1000step="f"{self._hit_vertex / max(self._term_window_steps, 1) * 1000:.0f}/{self._hit_tilt / max(self._term_window_steps, 1) * 1000:.0f}/{self._hit_vel_track / max(self._term_window_steps, 1) * 1000:.0f}"
+              f"  term_rate="f"{(self._term_vertex + self._term_tilt) / max(self._term_window_steps, 1) * 1000:.1f}/1000step"
+              f"  hit(touch/tilt)/1000step="f"{self._hit_vertex / max(self._term_window_steps, 1) * 1000:.0f}/{self._hit_tilt / max(self._term_window_steps, 1) * 1000:.0f}"
               f"  body_vertex_z mean={float(np.mean(body_vertex_z)):.4f}m  min={float(np.min(body_vertex_z)):.4f}m  max={float(np.max(body_vertex_z)):.4f}m  base_z_mean={float(np.mean(base_pos[:, 2])):.4f}m"
               f"  total_steps="f"{self._total_steps}"
               f"  step_counter="f"{getattr(self, 'step_counter', 0)}"

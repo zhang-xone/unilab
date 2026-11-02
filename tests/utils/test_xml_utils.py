@@ -352,6 +352,77 @@ def test_materialize_mujoco_hfield_attached_scene_accepts_repo_relative_fragment
     assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, "FL_foot_contact") >= 0
 
 
+def test_materialize_mujoco_hfield_attached_scene_stair_boxes_are_collidable(tmp_path) -> None:
+    """Injected stair boxes must collide with robot geoms (contype/conaffinity = 1/1).
+
+    Regression: they used to be injected with ``contype=2/conaffinity=2``.  The contact
+    filter is ``(c1 & a2) || (c2 & a1)``, so only geoms whose masks contain bit 2 matched
+    (balance_infantry wheels are 7/3) and legs/body fell through the stairs.
+    """
+    mujoco = pytest.importorskip("mujoco")
+
+    from unilab.terrains import TerrainGeneratorCfg, box_pyramid_stairs_inv
+
+    cfg = TerrainGeneratorCfg(
+        size=(8.0, 8.0),
+        horizontal_scale=0.1,
+        border_width=0.0,
+        num_rows=1,
+        num_cols=1,
+        add_lights=False,
+        seed=0,
+        sub_terrains={
+            "stairs": box_pyramid_stairs_inv(
+                step_height_range=(0.05, 0.22),
+                step_width=0.7,
+                platform_width=2.0,
+                border_width=0.2,
+            )
+        },
+    )
+
+    model, _ = materialize_mujoco_hfield_attached_scene(
+        model_file=_go2_mujoco_robot(),
+        terrain_cfg=cfg,
+        output_dir=tmp_path,
+        fragment_files=[_go2_locomotion_task()],
+    )
+
+    box_ids = [
+        geom_id
+        for geom_id in range(model.ngeom)
+        if (name := mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)) is not None
+        and name.startswith("box_geom_")
+    ]
+    assert box_ids, "box_pyramid_stairs_inv should inject box geoms"
+    for geom_id in box_ids:
+        assert int(model.geom_contype[geom_id]) == 1
+        assert int(model.geom_conaffinity[geom_id]) == 1
+
+    # Physical check: parking the robot inside a stair box must generate contacts.
+    free_joints = [
+        jnt
+        for jnt in range(model.njnt)
+        if int(model.jnt_type[jnt]) == int(mujoco.mjtJoint.mjJNT_FREE)
+    ]
+    assert free_joints, "robot model should have a free joint"
+    qadr = int(model.jnt_qposadr[free_joints[0]])
+    tallest_box = max(box_ids, key=lambda gid: model.geom_pos[gid][2] + model.geom_size[gid][2])
+
+    data = mujoco.MjData(model)
+    mujoco.mj_resetData(model, data)
+    data.qpos[qadr : qadr + 3] = model.geom_pos[tallest_box]
+    data.qpos[qadr + 3 : qadr + 7] = [1.0, 0.0, 0.0, 0.0]
+    mujoco.mj_forward(model, data)
+
+    contact_geoms = {
+        geom
+        for contact_idx in range(data.ncon)
+        for geom in (data.contact[contact_idx].geom1, data.contact[contact_idx].geom2)
+    }
+    assert contact_geoms & set(box_ids), "robot geoms do not collide with the injected stair boxes"
+
+
 def test_materialize_motrix_hfield_attached_scene_composes_robot_and_task_fragment() -> None:
     pytest.importorskip("motrixsim")
 

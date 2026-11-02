@@ -1,50 +1,73 @@
 cd /home/xxx/ubuntu_software/unilab/UniLab/src/unilab/envs/locomotion/balance_infantry
 
 # ═══════════════════════════════════════════════════════════════
-# 一键套餐: 量化 + 导出 + 测试
+# 一键套餐: 同步参数 → 量化 + 导出 → 测试
+#   从仓库根目录直接粘贴也能跑；换 run 只改 TASK / RUN_NAME / CKPT
 # ═══════════════════════════════════════════════════════════════
-python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt --static --calib_from_sim --calib_tune --calib_samples 10000 && \
-python quantize/test_quantized.py --model quantize/2026-10-10_23-42-58_mujoco/model_3000_int8.pt --compare
+BALANCE_DIR=/home/xxx/ubuntu_software/unilab/UniLab/src/unilab/envs/locomotion/balance_infantry
+cd "$BALANCE_DIR" || exit 1
 
+TASK=BalanceInfantryJumpvf
+RUN_NAME=2026-11-01_23-57-05_mujoco
+CKPT=model_5500
+RUN_DIR=/home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/$TASK/$RUN_NAME
+
+# 1) 同步参数 → 2) 量化/校准/导出 → 3) 测试 (同一条链，参数不会串 run)
+uv run python quantize/sync_trained_params.py \
+  --run "$RUN_DIR" --checkpoint "$CKPT.pt" && \
+uv run python quantize/quantize_model.py \
+  --input "$RUN_DIR/$CKPT.pt" \
+  --static --calib_from_sim --calib_tune --calib_samples 10000 && \
+uv run python quantize/test_quantized.py \
+  --model "quantize/$RUN_NAME/${CKPT}_int8.pt" --compare
+
+# 只检查当前 trained_params.py 是否与这个 run 一致
+uv run python quantize/sync_trained_params.py \
+  --run "$RUN_DIR" --checkpoint "$CKPT.pt" --check
+
+BalanceInfantryJumpvf
 # ═══════════════════════════════════════════════════════════════
 # float32 → ONNX 直接导出
 # ═══════════════════════════════════════════════════════════════
-python quantize/export_onnx.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt --calib_from_sim
-python quantize/export_onnx.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-09-19_08-26-13_mujoco/model_2700.pt --calib_from_sim
+uv run python quantize/export_onnx.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt --calib_from_sim
+uv run python quantize/export_onnx.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-09-19_08-26-13_mujoco/model_2700.pt --calib_from_sim
 
 # ═══════════════════════════════════════════════════════════════
 # 测试 float32 原始模型
 # ═══════════════════════════════════════════════════════════════
-python quantize/test_quantized.py --model /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt --no_quantize
-python quantize/test_quantized.py --model /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-09-19_08-26-13_mujoco/model_2700.pt --no_quantize
+uv run python quantize/test_quantized.py --model /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJumpvf/2026-11-01_23-57-05_mujoco/model_5500.pt --no_quantize
+uv run python quantize/test_quantized.py --model /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickVMC/2026-10-21_13-47-39_mujoco/model_3500.pt --no_quantize
 
 # ═══════════════════════════════════════════════════════════════
 # 动态量化
 # ═══════════════════════════════════════════════════════════════
-python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt
-python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-09-19_08-26-13_mujoco/model_2700.pt
+uv run python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt
+uv run python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-09-19_08-26-13_mujoco/model_2700.pt
 
 # ═══════════════════════════════════════════════════════════════
 # 静态量化 (随机校准)
 # ═══════════════════════════════════════════════════════════════
-python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt --static
-python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-09-19_08-26-13_mujoco/model_2700.pt --static
+uv run python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt --static
+uv run python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-09-19_08-26-13_mujoco/model_2700.pt --static
 
 # ═══════════════════════════════════════════════════════════════
 # 静态量化 + 仿真校准 + 微调 (推荐)
 # ═══════════════════════════════════════════════════════════════
-python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt --static --calib_from_sim --calib_tune
-python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-09-19_08-26-13_mujoco/model_2700.pt --static --calib_from_sim --calib_tune
-python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt --static --calib_from_sim --calib_tune
+uv run python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt --static --calib_from_sim --calib_tune
+uv run python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-09-19_08-26-13_mujoco/model_2700.pt --static --calib_from_sim --calib_tune
+uv run python quantize/quantize_model.py --input /home/xxx/ubuntu_software/unilab/UniLab/logs/rsl_rl_sequence/BalanceInfantryJoystickFlat/2026-10-10_23-42-58_mujoco/model_3000.pt --static --calib_from_sim --calib_tune
 
 # ═══════════════════════════════════════════════════════════════
 # 测试量化模型
 # ═══════════════════════════════════════════════════════════════
-python quantize/test_quantized.py --model quantize/2026-09-17_22-32-30_mujoco/model_2600_int8.pt
-python quantize/test_quantized.py --model quantize/2026-09-19_08-26-13_mujoco/model_2700_int8.pt
+uv run python quantize/test_quantized.py --model quantize/2026-11-01_00-47-33_mujoco/model_4500_int8.pt
+uv run python quantize/test_quantized.py --model quantize/2026-09-19_08-26-13_mujoco/model_2700_int8.pt
 
 # 对比 float32 vs int8
-python quantize/test_quantized.py --model quantize/2026-09-19_08-26-13_mujoco/model_2700_int8.pt --compare
+uv run python quantize/test_quantized.py --model quantize/2026-09-19_08-26-13_mujoco/model_2700_int8.pt --compare
+
+# 纯量化 A/B (关掉观测噪声, 差值只反映量化误差)
+uv run python quantize/test_quantized.py --model quantize/2026-10-20_17-31-15_mujoco/model_3300_int8.pt --compare --obs_noise_level 0 --obs_noise_seed 0
 
 # ═══════════════════════════════════════════════════════════════
 # gyro 测试

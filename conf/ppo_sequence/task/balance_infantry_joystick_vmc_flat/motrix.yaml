@@ -1,0 +1,278 @@
+# @package _global_
+# Balance Infantry Joystick — VMC 动作空间 (L0/θ) 变体, Motrix backend.
+# 与 mujoco.yaml 同一任务 (BalanceInfantryJoystickVMC)，只是 backend 与
+# sim/terrain 参数不同；两份文件保持显式复制（motrix 不支持 defaults 继承）。
+# Motrix does not support <defaults> inheritance because the scene model
+# (scene_flat.xml) differs from mujoco's (balance_infantry.xml + hfield terrain).
+# All training/algo/env/reward sections are copied explicitly.
+
+training:
+  task_name: BalanceInfantryJoystickVMC
+  sim_backend: motrix
+  play_steps: 1000
+  play_env_num: 16
+  render_spacing: 0.0
+  cam_tracking: true
+  cam_tracking_env_idx: 0
+  cam_tracking_extra_envs: 3
+
+interactive:
+  action_mode: policy
+  policy_obs_mode: auto
+  camera_follow_body: true
+  use_env_visual_model: false
+
+algo:
+  num_envs: 4096
+  num_steps_per_env: 48
+  max_iterations: 1000
+  obs_history_length: 5
+  empirical_normalization: true
+  policy:
+    init_noise_std: 1.0
+    num_encoder_obs: 145
+    latent_dim: 3
+    encoder_hidden_dims: [128, 64]
+    actor_hidden_dims: [128, 64, 32]
+    critic_hidden_dims: [256, 128, 64]
+    activation: elu
+    orthogonal_init: true
+    obs_normalization: true
+    use_real_vel: false
+  algorithm:
+    learning_rate: 10.0e-4
+    extra_learning_rate: 3.0e-4
+    encoder_grad_norm: 0.1
+    entropy_coef: 10.0e-3
+    schedule: "adaptive"
+    desired_kl: 0.005
+    num_learning_epochs: 5
+    num_mini_batches: 4
+    gamma: 0.99
+
+env:
+  obs_vel: false
+  obs_manual_norm: false
+  # --- scene: align with mujoco (no explicit model_file, terrain generator) ---
+  scene:
+    #model_file: src/unilab/assets/robots/balance_infantry/balance_infantry.xml
+    terrain:
+      generator:
+        curriculum: true
+        size: [8.0, 8.0]
+        num_rows: 10
+        border_width: 1.0
+        add_lights: true
+        horizontal_scale: 0.1
+      hfield_name: terrain_hfield
+      geom_name: floor
+    fragment_files: []
+  # --- sim ---
+  sim_dt: 0.002
+  ctrl_dt: 0.01
+  motrix_max_iterations: 50
+  # --- terrain ---
+  terrain_scan:
+    enabled: true
+    geom_name: floor
+    measured_points_x: [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
+    measured_points_y: [-0.1, 0.0, 0.1]
+  terrain_curriculum:
+    enabled: true
+    init_level: 5
+    randomize_init_level: true
+    promote_frac: 0.3
+    demote_frac: 0.1
+    spawn_height_margin: 0.05
+    curriculum_mode: "hybrid"
+    tracking_reward_demote_threshold: 0.4
+    type_curriculum_enabled: false
+    type_curriculum_switch_interval: 200
+  debug_enabled: false
+  # --- sensors ---
+  sensor:
+    gyro: gyro
+    accel: accel
+    local_linvel: local_linvel
+    upvector: upvector
+  # --- commands ---
+  commands:
+    vel_limit:
+      - [-3.0, 0, -5.0]
+      - [3.0, 0, 5.0]
+    cmd_curriculum_enabled: true
+    jump_curriculum_enabled: false   # 跳跃功能已移除
+    initial_vel_range: [-1.0, 1.0]
+    initial_yaw_range: 1.0
+    height_limit:
+      - 0.18
+      - 0.38
+    resampling_time: 6.0
+    rel_standing_envs: 0.1
+    cmd_curriculum_sustain_threshold: 1
+    cmd_curriculum_sustain_threshold_bad: 1
+    # 只有 episode 平均 |cmd_vx| > 0.5 的 episode 才参与升/降速判定
+    cmd_curriculum_min_cmd_speed: 0.5
+  # --- control ---
+  control_config:
+    wheel_kd: [0.1, 0.1]
+    clip_actions: 100.0
+    action_delay_range: [0, 1]
+    obs_delay_range: [0, 2]
+    # 注意: 本任务腿部不走关节 PD，leg_kp/leg_kd/action_scale_joint 仅保留给
+    # DR/日志兼容（腿力矩全部由 control_config.vmc 的虚拟 PD + 前馈给出）。
+    leg_kp: [50, 50, 50, 50]
+    leg_kd: [3.0, 3.0, 3.0, 3.0]
+    action_scale_joint: 0.5
+    action_scale_wheel: 50.0
+    vmc:
+      enabled: true
+      L1: 0.215
+      L2: 0.254
+      L3: 0.254
+      L4: 0.215
+      L5: 0.0
+      feedforward_force: 80.0
+      kp_theta: 100.0
+      kd_theta: 5.0
+      kp_l0: 1500.0
+      kd_l0: 80.0
+      action_scale_theta: 0.7
+      action_scale_l0: 0.15
+      default_L0: 0.28
+      theta_clip: 0.5
+      L0_clip: [0.15, 0.45]
+    action_smoothing: 1.0
+  # --- noise (kept for eval realism, level=1.0 from mujoco) ---
+  noise_config:
+    level: 1.0
+    scale_joint_angle: 0.025
+    scale_joint_vel: 1.0
+    scale_gyro: 0.25
+    scale_gravity: 0.05
+    scale_linvel: 0.1
+    scale_vmc_phi0: 0.02
+    scale_vmc_L0: 0.004
+    scale_vmc_phi0_dot: 0.2
+    scale_vmc_L0_dot: 0.1
+  # --- domain rand (aligned with mujoco: most disabled for fair sim-to-sim) ---
+  domain_rand:
+    randomize_base_mass: true
+    added_mass_range: [-4.0, 3.0]
+    randomize_body_mass: false
+    body_mass_multiplier_range: [0.9, 1.1]
+    random_com: true
+    com_offset_x: [-0.04, 0.04]
+    com_offset_y: [-0.03, 0.03]
+    com_offset_z: [-0.04, 0.04]
+    randomize_ground_friction: false
+    ground_friction_multiplier_range: [0.4, 2.0]
+    randomize_wheel_ground_friction: false
+    wheel_ground_friction_range: [0.4, 1.6]
+    randomize_vmc_ff: false
+    vmc_ff_multiplier_range: [0.8, 1.2]
+    randomize_wheel_kd: false
+    wheel_kd_multiplier_range: [0.8, 1.2]
+    randomize_kp: false
+    randomize_kd: false
+    kp_multiplier_range: [0.9, 1.1]
+    kd_multiplier_range: [0.9, 1.1]
+    randomize_motor_torque: false
+    torque_scale_range: [0.8, 1.1]
+    actuator_noise: false
+    actuator_noise_std_range: [0.0, 0.0]
+    randomize_inertia: false
+    inertia_multiplier_range: [0.7, 1.3]
+    randomize_dof_armature: false
+    dof_armature_multiplier_range: [0.8, 1.2]
+    randomize_joint_friction: false
+    damping_multiplier_range: [0.0, 5]
+    frictionloss_multiplier_range: [0.0, 1]
+    randomize_default_dof_pos: false
+    randomize_default_dof_pos_range: [-0.05, 0.05]
+    push_robots: true
+    push_interval_initial: 1000
+    push_interval_final: 1000
+    max_force: [50.0, 50.0, 25.0]
+    leg_max_force: [50.0, 50.0, 15.0]
+    push_body_name: "base_link"
+    curriculum_enabled: true
+    curriculum_warmup_steps: 0
+    curriculum_full_steps: 9200
+    curriculum_initial_scale: 0.0
+    curriculum_shape: "smooth"
+
+reward:
+  scales:
+    base_height_precise: 0.5
+    leg_length: 0.5
+    wheel_target: 0.3
+    tilt_precise: 0.5
+    tracking_lin_vel: 1.5
+    tracking_ang_vel: 0.75
+    tracking_yaw: 0.75
+    tracking_lin_vel_precise: 1.0
+    tracking_ang_vel_precise: 1.0
+    tracking_lin_vel_quad: -0.3
+    tracking_ang_vel_quad: -0.1
+    body_accel_tracking: 0
+    upright_swing_bonus: 0.0
+    orientation: -25.0
+    wheel_slip: -0.05
+    collision: -0.5
+    base_height: -1.0
+    body_corner_clearance: -2.0
+    swing_vertical: -0.1
+    swing_vel: -0.005
+    swing_symmetry: -0.5
+    vertex_penalty: -0.05
+    wheel_contact: -0.05
+    wheel_power: -0.00
+    lin_vel_z: -0.2
+    ang_vel_xy: -0.1
+    leg_length_rate: -0.1
+    stand: -1.0
+    action_rate: -0.02
+    action_smooth: -0.02
+    torques: -1.0e-5
+    dof_vel: -8e-5
+    dof_acc: -2.5e-7
+  clip_ranges:
+    orientation: 100.0
+    base_height: 100.0
+    lin_vel_z: 100.0
+    stand: 100.0
+    collision: 100.0
+  powerless_curriculum_threshold: 0.25
+  powerless_probability: 0.15
+  powerless_duration: 0.9
+  slope_spawn_prob: 0.4
+  rough_spawn_prob: 0.3
+  tilt_precise_sigma: 0.07
+  
+  tracking_sigma: 0.25
+  tracking_sigma_lin: 0.25
+  tracking_sigma_ang: 0.25
+  tracking_sigma_yaw: 0.25
+  tracking_sigma_dynamic: false
+  wheel_power_limit: 80.0
+  base_height_sigma: 0.12
+  leg_length_sigma: 0.12
+  body_corner_clearance_threshold: 0.09
+  stand_cmd_linvel_threshold: 0.10
+  stand_cmd_angvel_threshold: 0.10
+  stand_tilt_threshold: 0.192
+  stand_vel_weight: 1.0
+  stand_angvel_weight: 0.5
+  stand_linvelz_weight: 0.5
+  tilt_limit_tight: 1.4706    # ≈84.3°，与复旦 projected_gravity_z > -0.1 等价
+  swing_angle_limit: 1.0
+  min_height_tight: 0.06
+  # 课程完成后的终止收敛：生效后只剩 tilt（翻车）终止 + 地形出界，
+  # vertex_touch / swing / min_height 三种姿态终止关闭（命中仍计数，仅不再终止）。
+  # from_step 是控制步（每 iter = num_steps_per_env=48 步）：48000≈1000 iter，96000≈2000 iter，0=立即。
+  term_loosen_enabled: true
+  term_loosen_from_step: 0
+  air_spawn_max_height: 0.40
+  air_spawn_probability: 0.2
+  ground_spawn_max_height: 0.10

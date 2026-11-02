@@ -22,8 +22,19 @@ class Commands:
     cmd_curriculum_enabled: bool = True
     jump_curriculum_enabled: bool = True
     auto_jump_threshold: float = 0.0   # 测距触发自动跳跃阈值 (m)，>0 启用
+    auto_jump_hold_time: float = 0.4   # 自动跳跃触发后 cmd_jump 保持时长 (s)
+    auto_jump_cooldown: float = 1.0    # 两次自动跳跃触发的最小间隔 (s)
     cmd_curriculum_sustain_threshold: int = 4
     cmd_curriculum_sustain_threshold_bad: int = 4
+    cmd_curriculum_eval_steps: int = 2000
+    """速度课程评估窗口（env steps）；窗口内只统计 tracking，不按 episode 数触发。"""
+    cmd_curriculum_min_cmd_speed: float = 0.0
+    """只让 episode 平均 |cmd_vx| 超过该阈值的 episode 参与升/降速判定（0 = 不筛选）。
+
+    置 0 时原地自转（vx=0）和站立 episode 也参与判定：它们天然 tracking≈1，
+    会把速度范围一路推高，与策略真实可达速度脱钩。>0 时这类 episode 不参与
+    升/降速，只把连续计数清零。
+    """
     height_limit: list[float] = field(default_factory=lambda: [0.28, 0.32])
     jumph_range: list[float] = field(default_factory=lambda: [0.0, 0.3])
     resampling_time: float = 0.0

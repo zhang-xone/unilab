@@ -40,6 +40,8 @@ class RewardContext:
     tracking_sigma_yaw: float | None = None
     tracking_sigma_dynamic: bool = True
     wheel_power_limit: float | None = None
+    wheel_torque_start: float = 2.5    # 轮子力矩惩罚起始值（N·m）
+    wheel_torque_max: float = 3.5      # 轮子力矩惩罚最大值（N·m）
     base_height_target: np.ndarray = field(default_factory=lambda: np.empty(0))  # per-env
     base_height: np.ndarray = field(default_factory=lambda: np.empty(0))  # pre-fetched
 

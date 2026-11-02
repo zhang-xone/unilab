@@ -683,7 +683,7 @@ class Cod2026JoystickEnv(Cod2026BaseEnv):
         bwd_ratio = np.where(cmd_vel_sum_bwd > 0.01, vel_sum_bwd / cmd_vel_sum_bwd, 1.0)
 
         good = (fwd_ratio > 0.7) & (bwd_ratio > 0.7)
-        bad = (fwd_ratio < 0.3) | (bwd_ratio < 0.3)
+        bad = (fwd_ratio < 0.4) | (bwd_ratio < 0.4)
         self._curriculum_good_accum += float(np.mean(good))
         self._curriculum_bad_accum += float(np.mean(bad))
         self._curriculum_episode_count += len(env_ids)

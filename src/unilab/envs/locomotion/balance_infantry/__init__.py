@@ -1,4 +1,5 @@
 from .joystick import BalanceInfantryJoystickCfg, BalanceInfantryJoystickEnv
+from .joystick_vmc import BalanceInfantryJoystickVMCCfg, BalanceInfantryJoystickVMCEnv
 from .jumpv0 import BalanceInfantryJumpCfg, BalanceInfantryJumpEnv
 from .jumpvf import BalanceInfantryJumpCfg as BalanceInfantryJumpvfCfg, BalanceInfantryJumpEnv as BalanceInfantryJumpvfEnv
 from .jumpv0joy import BalanceInfantryJumpPretrainCfg, BalanceInfantryJumpPretrainEnv

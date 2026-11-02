@@ -1,6 +1,7 @@
 """Train with RSL-RL Sequence Encoder (ActorCriticSequence)."""
 
 import datetime
+import os
 import sys
 from pathlib import Path
 from typing import Any, cast
@@ -53,6 +54,18 @@ def _build_algo_config_dict(cfg: DictConfig) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise TypeError("cfg.algo must resolve to a dict")
     return cast(dict[str, Any], raw)
+
+
+def _allow_shape_mismatch() -> bool:
+    """续训时是否允许丢弃 shape 不一致的权重（会重置 critic）。
+
+    默认不允许：shape 变化通常意味着 env 配置变了（如 terrain_scan），
+    静默丢弃会让价值函数从头开始。确实需要时设
+    ``UNILAB_ALLOW_SHAPE_MISMATCH=1``。
+    """
+    return os.environ.get("UNILAB_ALLOW_SHAPE_MISMATCH", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
 
 def _build_train_cfg(cfg: DictConfig) -> dict[str, Any]:
@@ -162,7 +175,8 @@ def play_rsl_rl_sequence(cfg: DictConfig, device: str) -> str | None:
         Any,
         OnPolicyRunner(cast(Any, vec_env), train_cfg, log_dir=None, device=device),
     )
-    runner.load(str(load_path))
+    # 推理只用 actor/encoder，critic 维度不一致可以安全忽略
+    runner.load(str(load_path), allow_shape_mismatch=True)
     policy = runner.get_inference_policy(device=device)
     num_steps = _resolve_play_num_steps(cfg)
     output_video = Path(load_path_dir) / "play_video.mp4"
@@ -281,7 +295,7 @@ def main(cfg: DictConfig) -> None:
                 resume_path, _ = parse_checkpoint_path(cfg, root_dir=ROOT_DIR)
                 if resume_path:
                     print(f"Resuming from {resume_path}")
-                    runner.load(str(resume_path))
+                    runner.load(str(resume_path), allow_shape_mismatch=_allow_shape_mismatch())
 
             runner.learn(num_learning_iterations=max_iterations)
             env.close()

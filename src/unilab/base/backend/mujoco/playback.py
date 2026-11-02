@@ -10,6 +10,7 @@ from typing import Any, Callable, TypeVar
 import numpy as np
 
 from unilab.base.backend.playback_common import env_cfg_value
+from unilab.base.backend.mujoco.xml import load_mujoco_model_file
 from unilab.base.scene import SceneCfg
 
 ObsT = TypeVar("ObsT")
@@ -150,7 +151,7 @@ def resolve_render_play_model_files(
     mujoco: Any = _mujoco
 
     visual_base = (
-        mujoco.MjModel.from_xml_path(visual_model_file) if visual_model_file is not None else None
+        load_mujoco_model_file(visual_model_file) if visual_model_file is not None else None
     )
     tmp_root = Path(tmp_dir)
     path_by_model_id: dict[int, str] = {}
@@ -194,6 +195,22 @@ def materialize_visual_playback_model(
 
     mujoco: Any = _mujoco
 
+    # 大网格场景(5万+几何)下，下面的逐 geom 名称查找是 O(n^2)，随后 spec.compile() 又是一次
+    # 全量编译(数分钟)。用 playback 模型的 geom_size 做 key 缓存结果，命中时直接返回。
+    import hashlib
+
+    # 只有几何数量很大时缓存才划算（例如直接用碰撞体当视觉模型）。轻量视觉场景
+    # (几百个 geom) 编译只要一两秒，缓存反而会写出几百 MB 的 .mjb，不划算。
+    vpath = Path(str(visual_model_file))
+    use_cache = int(visual_base_model.ngeom) > 5000
+    cache_path = None
+    if use_cache:
+        key_src = np.ascontiguousarray(playback_model.geom_size, dtype=np.float64).tobytes()
+        cache_key = hashlib.md5(key_src).hexdigest()[:12]
+        cache_path = vpath.with_name(f"{vpath.stem}_visual_{cache_key}.mjb")
+        if cache_path.exists() and cache_path.stat().st_mtime >= vpath.stat().st_mtime:
+            return str(cache_path)
+
     spec = mujoco.MjSpec.from_file(visual_model_file)
     for geom_id in range(visual_base_model.ngeom):
         geom_name = mujoco.mj_id2name(visual_base_model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)
@@ -210,4 +227,7 @@ def materialize_visual_playback_model(
     visual_model = spec.compile()
     output = Path(output_path)
     mujoco.mj_saveModel(visual_model, str(output))
+    if cache_path is not None:
+        mujoco.mj_saveModel(visual_model, str(cache_path))
+        return str(cache_path)
     return str(output)

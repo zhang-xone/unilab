@@ -162,7 +162,7 @@ env:
     randomize_default_dof_pos_range: [-0.05, 0.05]
     push_robots: true
     push_interval_initial: 1000
-    push_interval_final: 350
+    push_interval_final: 600
     max_force: [50.0, 50.0, 25.0]
     leg_max_force: [ 50.0, 50.0, 15.0]
     push_body_name: "base_link"
@@ -287,4 +287,9 @@ reward:
   tilt_limit_tight: 1.0
   swing_angle_limit: 1.0
   min_height_tight: 0.10
+  # 课程完成后的终止收敛：生效后只剩 tilt（翻车）终止 + 地形出界，
+  # vertex_touch / swing / min_height 三种姿态终止关闭（命中仍计数，仅不再终止）。
+  # from_step 是控制步（每 iter = num_steps_per_env=48 步）：48000≈1000 iter，96000≈2000 iter，0=立即。
+  term_loosen_enabled: true
+  term_loosen_from_step: 0
   air_spawn_max_height: 0.40    # 空中出生最大高度（m），随 curriculum 从 0 渐进

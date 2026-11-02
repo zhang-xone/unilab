@@ -67,6 +67,7 @@ from unilab.envs.locomotion.balance_infantry.base import (
     BalanceInfantryBaseCfg,
     BalanceInfantryBaseEnv,
     forward_kinematics_fivebar,
+    vmc_feedforward_torques_no_ramp,
     vmc_mapping_fivebar,
     compute_vmc_torques_fivebar,
     compute_balance_motor_ctrl,
@@ -165,6 +166,14 @@ class BalanceRewardConfig:
     )
     base_height_target: float = 0.18
     base_height_sigma: float = 0.05      # 高度奖励的 σ
+    vz_threshold: float = 0.15      # 通用垂直速度阈值 (m/s)：判断"是否真的在向上蹬伸"。
+    #   base_height_precise 跳跃回合门控 / jump_failure 的 no_vz / takeoff_extend 的蹬伸判定
+    #   共用这一个值，避免三处各写 0.15 后调参时漏改。
+    jump_enter_height_range: tuple[float, float] = (0.20, 0.30)
+    # 判定跳跃 ≠ 进入跳跃：cmd_jump=1 只是"待跳"，只有 base_height 落进这个固定区间
+    # 才真正进入跳跃（jump_in_progress=True）——与 height_cmd 是多少无关。
+    # 待跳阶段 base_height 惩罚仍然生效，机器人会被拉下去蓄力；
+    # 若一次冲过下界，base_height 会把它拉回 height_cmd（也在本区间内），下次判据自然满足，不会卡死。
     leg_length_sigma: float = 0.02      # 腿长奖励的 σ
     tilt_precise_sigma: float = 0.07    # tilt 精确奖励的 σ（4°）
     tracking_sigma: float = 0.25
@@ -176,11 +185,22 @@ class BalanceRewardConfig:
     tilt_limit_tight: float = 20.0 * np.pi / 180.0
     swing_angle_limit: float = 45.0 * np.pi / 180.0  # 摆角 θ 过大终止
     min_height_tight: float = 0.22          # 高度终止线（m）
+    # ── 课程完成后的终止收敛：完成后只剩 tilt（翻车）终止 ──
+    # 届时关闭 vertex_touch / swing / height 三种姿态终止，只保留 tilt > tilt_limit_tight
+    # 与地形出界（防止掉出地形后无限下坠）。tilt_limit_tight 本身不变。
+    # 注意：本 env 另有历史行为 curriculum_done → 仅 up_z<0（完全倒置）终止；
+    # term_loosen_enabled 打开时优先走 tilt 规则，两个开关都关则保持原逻辑。
+    term_loosen_enabled: bool = False
+    term_loosen_from_step: int = 0           # 生效的控制步（每 iter = num_steps_per_env 步）；0=立即
     air_spawn_max_height: float = 0.40       # 空中出生最大高度（m），随 curriculum scale 从 0 渐进至此值
     n_steps_delay: int = 40
     powerless_duration: float = 1.0  # reset 后无力时长（秒），期间扭矩=0/奖励=0/不终止
     powerless_curriculum_threshold: float = 0.125  # curriculum progress 超过此值才启用无力期（2400步≈100iter）
     powerless_probability: float = 0.2  # 每个 reset 随机启用无力期的概率
+    # 无力期固定蹬腿前馈（N/腿）。独立于 control_config.vmc.feedforward_force：
+    # 后者是常规 VMC 重力补偿系数（现在配 0），这里只想让断电瞬间有机械力把腿蹬出。
+    # 0 = 关闭（无力期扭矩严格为 0，即旧行为）。
+    powerless_feedforward_force: float = 150.0
     lift_force_max: float = 00.0  # 无力期竖直拉力最大值（N），课程 scale=0 时全量，scale→1 时归零
     # orientation_stand 的启用阈值
     stand_cmd_linvel_threshold: float = 0.1  # |cmd_vx| < 此值 → 认为应该站立
@@ -196,7 +216,8 @@ class BalanceRewardConfig:
     # 平地概率 = 1 - slope_spawn_prob - rough_spawn_prob
     # ── 跳跃命令 ──────────────────────────────
     jump_prob: float = 0.05         # 进入跳跃模式的概率（cmd_jump=1）
-    jump_stand_height: float = 0.2   # 跳跃环境固定的站立高度命令（非跳跃环境仍按 height_limit 随机）
+    jump_stand_height: float = 0.2   # 旧字段；仅当 jump_stand_height_range 未设置时作退化默认
+    jump_stand_height_range: tuple[float, float] = (0.20, 0.30)  # 进入跳跃时高度目标重采样区间 [lo, hi]
     jump_crouch_height: float = 0.20   # 跳跃蹲伏/收腿高度（m）
     jump_launch_height: float = 0.25   # 跳跃蹬地高度（m），超过此高度不罚 base_height
     jump_exit_time_scale: float = 1.3   # 跳跃退出时间缩放
@@ -206,6 +227,9 @@ class BalanceRewardConfig:
     jump_cooldown_s: float = 1.5   # 跳跃退出后冷却时间 (s)，华南虎 1.5s
     jump_min_episode_time_s: float = 3.0   # 最少 episode 时间后才允许触发跳跃 (s)，华南虎 3.0
     jump_require_tracking: bool = True     # 是否要求速度/高度已跟踪稳定才允许跳跃，华南虎 True
+    # ── leg_tuck 的起跳窗口（不是复旦原逻辑，属于本环境扩展）──
+    leg_tuck_reach_height: float = 0.33   # 机体离地高度超过此值
+    leg_tuck_reach_vz: float = 0.20       # 且竖直速度大于此值 → 零延迟开启收腿奖励
     jump_height_error_max: float = 0.04    # require_tracking 时高度误差上限 (m)，华南虎 0.04
     jump_lin_vel_error_max: float = 1.0    # require_tracking 时速度误差上限 (m/s)，华南虎 1.0
     jump_landing_penalty_ramp_s: float = 0.5  # 落地后惩罚线性恢复时间 (s)，0=瞬时恢复
@@ -221,8 +245,9 @@ class BalanceRewardConfig:
     jump_assist_mode: str = "velocity"          # "velocity" 触发瞬间灌速度 / "accel" PUSH 每步灌加速度
     jump_height_play: float = 0.10               # play 模式 H 键跳跃高度 (m)
     body_corner_clearance_threshold: float = 0.08  # 角点离地 < 此值（m）开始惩罚
-    vel_track_ratio_threshold: float = 0.3  # 速度跟踪比例阈值：|vx_actual| / |cmd_vx| < 此值 → 进入终止计数
-    vel_track_min_cmd: float = 0.2  # 只有 |cmd_vx| > 此值时才检查速度跟踪终止
+    wheel_air_margin: float = 0.02                # 轮底高于此值才算离地（m）
+    wheel_air_full_height: float = 0.20           # 轮底达到此高度时奖励满 1.0（m）
+    
 
 
 @dataclass(kw_only=True)
@@ -239,7 +264,10 @@ class BalanceRoughTerrainCfg(TerrainGeneratorCfg):
             "flat": flat(proportion=0.2),
             "random_rough": random_rough(
                 proportion=0.2,
-                noise_range=(0.005, 0.1),
+                # noise_range 不随 difficulty 插值（heightfield_terrains.py 里 `del difficulty`），
+                # 所以这里是"全难度恒定"的粗糙度。上界 0.05 → 最大 16.8°，>17° 面积 0%，
+                # 与 hf_pyramid_slope(0.30) 的 18.5° 上限对齐；原 0.1 会产生 29.7° / 6.58% 超 17°。
+                noise_range=(0.005, 0.05),
                 noise_step=0.005,
                 border_width=0.2,
                 downsampled_scale=0.2,
@@ -252,27 +280,27 @@ class BalanceRoughTerrainCfg(TerrainGeneratorCfg):
             ),
             "pyramid_stairs": box_pyramid_stairs(
                 proportion=0.1,
-                step_height_range=(0.005, 0.2),
-                step_width=0.4,
-                platform_width=3.0,
+                step_height_range=(0.005, 0.21),
+                step_width=0.6,
+                platform_width=2.4,
                 border_width=0.2,
             ),
             "pyramid_stairs_inv": pyramid_stairs_inv(
                 proportion=0.1,
-                step_height_range=(0.005, 0.2),
-                step_width=0.4,
+                step_height_range=(0.005, 0.21),
+                step_width=0.6,
                 platform_width=3.0,
                 border_width=0.2,
             ),
             "hf_pyramid_slope": hf_pyramid_slope(
                 proportion=0.15,
-                slope_range=(0.0, 0.15),
+                slope_range=(0.0, 0.4),  # tan 值：实测坡面角 名义 20.8° / 最大 22.0°（22° 上限）
                 platform_width=2.0,
                 border_width=0.2,
             ),
             "hf_pyramid_slope_inv": hf_pyramid_slope_inv(
                 proportion=0.15,
-                slope_range=(0.0, 0.15),
+                slope_range=(0.0, 0.4),  # tan 值：实测坡面角 名义 20.8° / 最大 22.0°（22° 上限）
                 platform_width=2.0,
                 border_width=0.2,
             ),
@@ -408,26 +436,38 @@ def build_balance_backend_reset_randomization(
             base_com_offset[:, 2] = np.random.uniform(low, high, size=(num_reset,))
         payload.base_com_offset = base_com_offset
 
-    if getattr(domain_rand, "randomize_ground_friction", False):
+    randomize_ground = bool(getattr(domain_rand, "randomize_ground_friction", False))
+    randomize_wheel_ground = bool(getattr(domain_rand, "randomize_wheel_ground_friction", False))
+    if randomize_ground or randomize_wheel_ground:
         base_geom_friction = env._backend.get_geom_friction()
-        terrain_cfg = getattr(env._cfg.scene, 'terrain', None)
-        geom_name = terrain_cfg.geom_name if terrain_cfg is not None else 'floor'
-        ground_geom_id = env._backend.get_geom_id(geom_name)
+        terrain_cfg = getattr(env._cfg.scene, "terrain", None)
+        terrain_geom_name = terrain_cfg.geom_name if terrain_cfg is not None else "floor"
+        ground_geom_id = env._backend.get_geom_id(terrain_geom_name)
         if base_geom_friction is None:
             raise ValueError("ground friction randomization requires a cached geom-friction table")
         if ground_geom_id is None:
             raise ValueError("ground friction randomization requires a ground geom id")
         geom_friction_template = np.asarray(base_geom_friction, dtype=np.float64)
-        low, high = domain_rand.ground_friction_multiplier_range
         geom_friction = np.broadcast_to(
             geom_friction_template, (num_reset, *geom_friction_template.shape)
         ).copy()
-        geom_friction[:, ground_geom_id, 0] = geom_friction_template[ground_geom_id, 0] * np.random.uniform(
-            low=low, high=high, size=(num_reset,)
-        )
-        geom_friction[:, ground_geom_id, 1] = geom_friction_template[ground_geom_id, 1] * np.random.uniform(
-            low=low, high=high, size=(num_reset,)
-        )
+        if randomize_wheel_ground:
+            low, high = domain_rand.wheel_ground_friction_range
+            wheel_ground_friction = np.random.uniform(low=low, high=high, size=(num_reset,))
+            for wheel_geom_name in ("left_wheel_geom", "right_wheel_geom"):
+                try:
+                    wheel_geom_id = env._backend.get_geom_id(wheel_geom_name)
+                except ValueError as exc:
+                    raise ValueError(
+                        f"wheel-ground friction randomization requires geom '{wheel_geom_name}'"
+                    ) from exc
+                geom_friction[:, wheel_geom_id, 0] = wheel_ground_friction
+            geom_friction[:, ground_geom_id, 0] = wheel_ground_friction
+        else:
+            low, high = domain_rand.ground_friction_multiplier_range
+            ground_friction_scale = np.random.uniform(low=low, high=high, size=(num_reset,))
+            geom_friction[:, ground_geom_id, 0] = geom_friction_template[ground_geom_id, 0] * ground_friction_scale
+            geom_friction[:, ground_geom_id, 1] = geom_friction_template[ground_geom_id, 1] * ground_friction_scale
         payload.geom_friction = geom_friction
 
     if getattr(domain_rand, "randomize_geom_solref", False):
@@ -473,16 +513,50 @@ def build_balance_backend_reset_randomization(
             "right_rear_child1_joint",
         ]
 
+        # dof_armature_multiplier_range 作为所有关节组的默认值；
+        # 显式配置 leg_main/wheel/passive_* 时再覆盖。
+        armature_default = getattr(domain_rand, "dof_armature_multiplier_range", [0.8, 1.2])
         for joint_names, multiplier_range in [
-            (leg_main_joints, getattr(domain_rand, "leg_main_armature_multiplier_range", [0.8, 1.2])),
-            (wheel_joints, getattr(domain_rand, "wheel_armature_multiplier_range", [0.8, 1.2])),
-            (passive_joints, getattr(domain_rand, "passive_armature_multiplier_range", [0.8, 1.2])),
+            (leg_main_joints, getattr(domain_rand, "leg_main_armature_multiplier_range", armature_default)),
+            (wheel_joints, getattr(domain_rand, "wheel_armature_multiplier_range", armature_default)),
+            (passive_joints, getattr(domain_rand, "passive_armature_multiplier_range", armature_default)),
         ]:
             low, high = multiplier_range
             dof_ids = env._backend.get_joint_dof_indices(joint_names)
             dof_armature[:, dof_ids] *= np.random.uniform(low, high, size=(num_reset, len(dof_ids)))
 
         payload.dof_armature = dof_armature
+
+    if getattr(domain_rand, "randomize_joint_friction", False):
+        # 移植自 balance_infantry/joystick.py：关节阻尼 / 干摩擦按组随机化。
+        # 走 SimBackend 的公开 getter，不直接读 _model 私有字段。
+        base_damping = np.asarray(env._backend.get_dof_damping(), dtype=np.float64)
+        base_frictionloss = np.asarray(env._backend.get_dof_frictionloss(), dtype=np.float64)
+        dof_damping = np.broadcast_to(base_damping, (num_reset, base_damping.size)).copy()
+        dof_frictionloss = np.broadcast_to(base_frictionloss, (num_reset, base_frictionloss.size)).copy()
+
+        leg_main_joints = ["left_front_joint", "left_rear_joint", "right_front_joint", "right_rear_joint"]
+        wheel_joints = ["left_wheel_joint", "right_wheel_joint"]
+        passive_joints = [
+            "left_front_child1_joint", "left_front_child2_joint", "left_front_child3_joint",
+            "left_rear_child1_joint",
+            "right_front_child1_joint", "right_front_child2_joint", "right_front_child3_joint",
+            "right_rear_child1_joint",
+        ]
+
+        damp_mult = getattr(domain_rand, "damping_multiplier_range", [0.1, 10.0])
+        fric_mult = getattr(domain_rand, "frictionloss_multiplier_range", [0.1, 10.0])
+        for joint_names in (leg_main_joints, wheel_joints, passive_joints):
+            dof_ids = env._backend.get_joint_dof_indices(joint_names)
+            dof_damping[:, dof_ids] *= np.random.uniform(
+                damp_mult[0], damp_mult[1], size=(num_reset, len(dof_ids))
+            )
+            dof_frictionloss[:, dof_ids] *= np.random.uniform(
+                fric_mult[0], fric_mult[1], size=(num_reset, len(dof_ids))
+            )
+
+        payload.dof_damping = dof_damping
+        payload.dof_frictionloss = dof_frictionloss
 
     return None if payload.is_empty() else payload
 
@@ -647,7 +721,9 @@ class BalanceInfantryJumpDomainRandomizationProvider(LocomotionDRProvider):
         # 1. 初始位置随机化
         # -----------------------------------------------------------
 
-        qpos[:, 0:2] += np.random.uniform(-0.5, 0.5, (num_reset, 2))  # xy ±0.5m
+        _xy_j = float(env.cfg.spawn_xy_jitter)
+        if _xy_j > 0.0:
+            qpos[:, 0:2] += np.random.uniform(-_xy_j, _xy_j, (num_reset, 2))  # xy 抖动
 
         # 高台地形：固定在平台正中心，清零 xy 偏移
         _get_terrain = getattr(env._spawn, "get_terrain_type_for", None)
@@ -664,8 +740,6 @@ class BalanceInfantryJumpDomainRandomizationProvider(LocomotionDRProvider):
         )
         ground_mask = np.random.uniform(size=(num_reset,)) < (1.0 - scale)  # 前期地面，后期空中
         extra_z[ground_mask] = 0
-        high_mask = np.random.uniform(size=(num_reset,)) < 0.1  # 10% 高抛
-        extra_z[high_mask] += np.random.uniform(0.0, 0.3, size=int(np.sum(high_mask)))
         qpos[:, 2] += extra_z
         qpos[:, 0:3] = env._spawn.apply_spawn(env_ids, qpos[:, 0:3])  # 地形边界裁剪
 
@@ -1045,6 +1119,7 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
 
         self._vmc_ff = np.full(num_envs, ctrl_cfg.vmc.feedforward_force, dtype=self._np_dtype)
         self._base_vmc_ff = self._vmc_ff.copy()
+        self._effective_vmc_ff = self._vmc_ff.copy()
 
         self._base_default_dof_pos = np.broadcast_to(
             self.get_dof_pos()[0, :4].copy(), (num_envs, 4)
@@ -1054,6 +1129,17 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         self._backend.set_pre_step_control(self._pre_step_motor_control)
 
         self._curriculum = CurriculumManager(cfg, num_envs)
+        if self._cfg.debug_enabled:
+            _cc = cfg.commands
+            print(
+                "  [cmd_cfg] 生效的课程配置: "
+                f"sustain={getattr(_cc, 'cmd_curriculum_sustain_threshold', '?')}  "
+                f"bad={getattr(_cc, 'cmd_curriculum_sustain_threshold_bad', '?')}  "
+                f"min_cmd_speed={getattr(_cc, 'cmd_curriculum_min_cmd_speed', '未配置→0')}  "
+                f"initial_vel_range={getattr(_cc, 'initial_vel_range', '?')}  "
+                f"vel_limit_x={_cc.vel_limit[1][0]}  "
+                f"enabled={getattr(_cc, 'cmd_curriculum_enabled', '?')}"
+            )
 
         self._init_domain_randomization(BalanceInfantryJumpDomainRandomizationProvider())
         self._init_reward_functions()
@@ -1063,7 +1149,7 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         self._tilt_count = np.zeros(num_envs, dtype=np.int32)
         self._height_low_count = np.zeros(num_envs, dtype=np.int32)
         self._swing_count = np.zeros(num_envs, dtype=np.int32)
-        self._vel_track_count = np.zeros(num_envs, dtype=np.int32)
+        
         self._flip_count = np.zeros(num_envs, dtype=np.int32)
         self._last_dof_vel_for_acc = np.zeros((num_envs, NUM_BALANCE_ACTIONS), dtype=self._np_dtype)
         self._last_rw_body = None   
@@ -1075,14 +1161,15 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         self._term_tilt = 0
         self._term_height_low = 0
         self._term_swing = 0
-        self._term_vel_track = 0
+        self._term_loosened = False
+        
         self._total_steps = 0
         self._term_window_steps = 0
         self._hit_vertex = 0
         self._hit_tilt = 0
         self._hit_height_low = 0
         self._hit_swing = 0
-        self._hit_vel_track = 0
+        
 
         self._episode_vel_sum = np.zeros(num_envs, dtype=self._np_dtype)
         self._episode_cmd_vel_sum = np.zeros(num_envs, dtype=self._np_dtype)
@@ -1130,6 +1217,7 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
             self._obs_std = np.append(self._obs_std, np.array([1.5, 0.5, 0.5], dtype=self._np_dtype))
         # ── 跳跃命令 ──
         self._jump_in_progress = np.zeros(num_envs, dtype=bool)
+        self._jump_entered = np.zeros(num_envs, dtype=bool)   # 判定后是否已真正进入跳跃（高度降下来）
         self._jumph = np.zeros(num_envs, dtype=self._np_dtype)
         self._prev_leg_len = np.zeros((num_envs, 2), dtype=self._np_dtype)
 
@@ -1140,6 +1228,9 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         self._contact_filt = np.ones((num_envs, 2), dtype=bool)  # 初始假定接地，等待 _check_flight 更新
         self._last_contacts = np.zeros((num_envs, 2), dtype=bool)
         self._landing_air_time = np.zeros(num_envs, dtype=self._np_dtype)
+        # 连续离地步数：用来区分“真落地”和地面抖动（<5 步视为抖动，不清 jump cooldown）
+        self._air_streak = np.zeros(num_envs, dtype=np.int32)
+        self._air_last = np.zeros(num_envs, dtype=np.int32)
 
         # ── VMC 状态缓冲 (五连杆) ──
         self._vmc_phi1 = np.zeros((num_envs, 2), dtype=self._np_dtype)
@@ -1155,6 +1246,10 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         self._vmc_last_phi0 = np.zeros((num_envs, 2), dtype=self._np_dtype)
         self._vmc_last_gravity = np.zeros((num_envs, 3), dtype=self._np_dtype)
         self._vmc_theta_dot = np.zeros((num_envs, 2), dtype=self._np_dtype)
+        # 奖励专用摆角速度 sitad：对 theta 差分并对 2π 解缠。
+        # phi0 跨 atan2 分支切点（±π）时 theta 连续，因此不会产生 2π 假速度。
+        self._swing_sitad = np.zeros((num_envs, 2), dtype=self._np_dtype)
+        self._swing_last_theta = np.zeros((num_envs, 2), dtype=self._np_dtype)
         max_delay = max(self._cfg.control_config.action_delay_range)
         obs_delay_min, obs_delay_max = self._cfg.control_config.obs_delay_range
         if obs_delay_min == 0 and obs_delay_max == 0:
@@ -1185,6 +1280,9 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         self._prev_targets_buffer = np.zeros((num_envs, NUM_BALANCE_ACTIONS), dtype=self._np_dtype)
         self._action_t2 = np.zeros((num_envs, NUM_BALANCE_ACTIONS), dtype=self._np_dtype)
         self._action_t3 = np.zeros((num_envs, NUM_BALANCE_ACTIONS), dtype=self._np_dtype)
+        # 真实动作历史（供 action_smooth 二阶差分；与 critic 的 target 历史 _action_t2/t3 分开）
+        self._prev_actions = np.zeros((num_envs, NUM_BALANCE_ACTIONS), dtype=self._np_dtype)
+        self._prev2_actions = np.zeros((num_envs, NUM_BALANCE_ACTIONS), dtype=self._np_dtype)
         self._current_targets = np.zeros((num_envs, NUM_BALANCE_ACTIONS), dtype=self._np_dtype)
         self._cmd_vel_ref = float(self._cfg.commands.vel_limit[1][0])
         self._latest_obs_scaled = None
@@ -1220,6 +1318,7 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         # 先清零 spin_mask，_sample_commands 里会重新设置
         self._spin_mask[env_ids] = False
         self._jump_in_progress[env_ids] = False
+        self._jump_entered[env_ids] = False
         self._jumph[env_ids] = 0.0
         self._prev_leg_len[env_ids] = 0.0
         self._prev_world_vz[env_ids] = 0.0
@@ -1227,6 +1326,8 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         self._contact_filt[env_ids] = False
         self._last_contacts[env_ids] = False
         self._base_air_time[env_ids] = 0.0
+        self._air_streak[env_ids] = 0
+        self._air_last[env_ids] = 0
         self._prev_filtered_actions[env_ids] = 0.0
         if hasattr(self, '_jump_cooldown'):
             self._jump_cooldown[env_ids] = 0
@@ -1271,7 +1372,7 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         self._tilt_count[env_ids] = 0
         self._height_low_count[env_ids] = 0
         self._swing_count[env_ids] = 0
-        self._vel_track_count[env_ids] = 0
+        
         self._flip_count[env_ids] = 0
         self._last_dof_vel_for_acc[env_ids] = 0.0
         self._last_motor_ctrl[env_ids] = 0.0
@@ -1292,6 +1393,8 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         self._prev_targets_buffer[env_ids] = self.default_angles
         self._action_t2[env_ids] = self.default_angles
         self._action_t3[env_ids] = self.default_angles
+        self._prev_actions[env_ids] = 0.0
+        self._prev2_actions[env_ids] = 0.0
 
         self._vmc_last_L0[env_ids] = 0.0
         self._vmc_last_phi0[env_ids] = 0.0
@@ -1301,6 +1404,8 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         self._vmc_phi0[env_ids] = 0.0
         self._vmc_L0_dot[env_ids] = 0.0
         self._vmc_phi0_dot[env_ids] = 0.0
+        self._swing_sitad[env_ids] = 0.0
+        self._swing_last_theta[env_ids] = 0.0
         self._vmc_F[env_ids] = 0.0
         self._vmc_T[env_ids] = 0.0
         self._vmc_torques[env_ids] = 0.0
@@ -1327,8 +1432,8 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         leg_clip = self._leg_action_clip
         wheel_clip = self._cfg.control_config.clip_actions
         clipped = actions.copy()
-        clipped[:, [0, 1, 3, 4]] = np.clip(actions[:, [0, 1, 3, 4]], -leg_clip, leg_clip)
-        clipped[:, [2, 5]] = np.clip(actions[:, [2, 5]], -wheel_clip, wheel_clip)
+        clipped[:, [0, 1, 2, 3]] = np.clip(actions[:, [0, 1, 2, 3]], -leg_clip, leg_clip)
+        clipped[:, [4, 5]] = np.clip(actions[:, [4, 5]], -wheel_clip, wheel_clip)
 
         alpha = self._action_smoothing  # per-env 随机化 α (训练时 DR, 部署时固定)
         mask = alpha < 1.0
@@ -1338,6 +1443,12 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
             clipped[mask] = smoothed
 
         clipped_actions = np.asarray(clipped, dtype=self._np_dtype)
+        # 动作历史后移：_prev_actions ← a_{t-1}，_prev2_actions ← a_{t-2}
+        # 注意：_action_t2/_action_t3 存的是关节 target，不能用于动作差分
+        self._prev2_actions[:] = self._prev_actions
+        self._prev_actions[:] = state.info.get(
+            "current_actions", np.zeros_like(self._prev_actions)
+        )
         state.info["last_actions"] = state.info.get("current_actions", np.zeros_like(clipped_actions))
 
         exec_actions = clipped_actions
@@ -1485,8 +1596,19 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         pitch = np.arcsin(np.clip(gravity_body[:, 0], -1.0, 1.0))
 
         self._vmc_theta_dot = -self._vmc_phi0_dot - pitch_dot[:, np.newaxis]
-        self._theta_vmc_l = np.pi / 2 - self._vmc_phi0[:, 0] - pitch
-        self._theta_vmc_r = np.pi / 2 - self._vmc_phi0[:, 1] - pitch
+        self._theta_vmc_l = (np.pi / 2 - self._vmc_phi0[:, 0] + pitch + np.pi) % (2.0 * np.pi) - np.pi
+        self._theta_vmc_r = (np.pi / 2 - self._vmc_phi0[:, 1] + pitch + np.pi) % (2.0 * np.pi) - np.pi
+
+        # 奖励用摆角速度 sitad：直接对 theta 差分。theta 已 mod 2π 折回 [-π, π]，
+        # phi0 跨 atan2 分支切点时 theta 连续；这里再做一次最短弧解缠兜底。
+        theta_cur = np.column_stack([self._theta_vmc_l, self._theta_vmc_r])
+        theta_delta = theta_cur - self._swing_last_theta
+        theta_delta = (theta_delta + np.pi) % (2.0 * np.pi) - np.pi
+        self._swing_sitad = theta_delta / float(self._cfg.sim_dt)
+        if np.any(just_reset):
+            self._swing_sitad[just_reset] = 0.0
+        self._swing_last_theta = theta_cur.copy()
+
     def _compute_vmc_torques(self, backend: Any) -> np.ndarray:
         """纯 VMC 重力前馈: mg/cos(θ) → 雅可比映射 → 关节力矩。
 
@@ -1501,6 +1623,7 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         base_annealed = self._base_vmc_ff * (1.0 - curriculum_scale) + target_ff * curriculum_scale
         dr_mult = np.where(self._base_vmc_ff > 1e-6, self._vmc_ff / self._base_vmc_ff, 1.0)
         effective_vmc_ff = base_annealed * dr_mult
+        self._effective_vmc_ff = effective_vmc_ff
 
         theta_world = np.column_stack([self._theta_vmc_l, self._theta_vmc_r])
         theta_abs = np.abs(theta_world)
@@ -1538,6 +1661,26 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         self._vmc_J_rr = (vmc_torques[:, 3:4] / F_safe[:, 1:2]).astype(self._np_dtype)
 
         return vmc_torques
+
+    def _compute_vmc_feedforward_torques(self, force: float | None = None) -> np.ndarray:
+        """无力期专用：只有一个不淡出的重力前馈（Tp = 0，轮驱为 0）。
+
+        ``force`` 给定时用这个**固定**力（N/腿），与 ``feedforward_force`` / DR / 课程
+        全部无关；``None`` 时退回 ``_effective_vmc_ff``（旧行为）。
+        """
+        vmc_cfg = self._cfg.control_config.vmc
+        ff = (
+            self._effective_vmc_ff
+            if force is None
+            else np.full_like(self._effective_vmc_ff, float(force))
+        )
+        theta_world = np.column_stack([self._theta_vmc_l, self._theta_vmc_r])
+        return vmc_feedforward_torques_no_ramp(
+            ff, theta_world,
+            self._vmc_phi1, self._vmc_phi4, self._vmc_phi0,
+            self._vmc_phi2, self._vmc_phi3, self._vmc_sigma1, self._vmc_L0,
+            vmc_cfg.L1, vmc_cfg.L4, self._num_envs, self._np_dtype,
+        )
 
     def _pre_step_motor_control(self, backend: Any, policy_ctrl: np.ndarray) -> np.ndarray:
         lift_force = np.zeros((self._num_envs, 1, 3), dtype=self._np_dtype)
@@ -1578,7 +1721,15 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
 
         powerless_steps = int(self._curriculum.effective_powerless_duration / self._cfg.ctrl_dt)
         mask = (self._episode_steps < powerless_steps) & self._powerless_active
-        motor_ctrl[mask] = 0.0
+        if np.any(mask):
+            # 无力期：关掉 PD 与轮驱，只保留**固定**的蹬腿前馈。
+            # 用 powerless_feedforward_force（独立常量），不吃 feedforward_force ——
+            # 后者是常规 VMC 重力补偿系数（配 0），吃它会让这段又变回纯 0 扭矩。
+            _pw_ff = float(getattr(self._cfg.reward_config, "powerless_feedforward_force", 0.0))
+            if _pw_ff > 0.0:
+                motor_ctrl[mask] = self._compute_vmc_feedforward_torques(_pw_ff)[mask]
+            else:
+                motor_ctrl[mask] = 0.0
 
         motor_ctrl *= self._torque_scale[:, np.newaxis]
 
@@ -1651,6 +1802,7 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
 
         noisy_gyro = self._obs_noise(gyro, noise_cfg.scale_gyro)
         noisy_dof_vel = self._obs_noise(dof_vel, noise_cfg.scale_joint_vel)
+        noisy_pitch, noisy_roll = self._noisy_attitude(gravity_body)
 
         default_dof_pos = self._default_dof_pos[env_ids] if env_ids is not None else self._default_dof_pos
 
@@ -1660,15 +1812,18 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         )
 
         obs_cols = [
-            noisy_gyro, pitch, roll,
+            noisy_gyro, noisy_pitch, noisy_roll,
             commands[:, [0, 2, 3, 4]],
             last_actions,
-            (dof_pos[:, :4] - default_dof_pos[:, :4]),
+            self._obs_noise(
+                dof_pos[:, :4] - default_dof_pos[:, :4],
+                noise_cfg.scale_joint_angle,
+            ),
             noisy_dof_vel,
             vmc_theta_l, vmc_theta_r, vmc_L0_l, vmc_L0_r,
         ]
         if self._cfg.obs_vel:
-            obs_cols.append(local_linvel)
+            obs_cols.append(self._obs_noise(local_linvel, noise_cfg.scale_linvel))
         obs_flat = np.asarray(np.concatenate(obs_cols, axis=1), dtype=dtype)
 
         if self._cfg.debug_enabled and env_ids is None:
@@ -1893,7 +2048,7 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
             "action_smooth": self._reward_action_smooth,
             "dof_vel": self._reward_dof_vel,
             "dof_acc": common_rewards.dof_acc,
-            "torques": common_rewards.torques,
+            "torques": common_rewards.dof_torques_l2,
             # ── Balance 特有：
             # ——速度追踪奖励（复旦风格） ——————————————————
             "tracking_lin_vel": self._reward_tracking_lin_vel,
@@ -1942,10 +2097,12 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
             "crash_landing": self._reward_crash_landing,
             "jump_failure": self._reward_jump_failure,
             "push_force": self._reward_push_force,
-            # ── 腿对称惩罚（复旦风格） ──
+            # ── 腿对称 / 摆角归零惩罚（复旦风格） ──
             "nominal_state": self._reward_nominal_state,
             # ── 轮子接触惩罚 ──────────────────
             "wheel_contact": self._reward_wheel_contact,
+            # ── 轮子离地高度（起跳引导，不门控） ──
+            "wheel_air_height": self._reward_wheel_air_height,
         }
 
     # ── A. 姿态 / 高度 ──────────────────────────────────────────────
@@ -1960,54 +2117,58 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         num_wheels_off = (2 - np.sum(contact_filt, axis=1)).astype(get_global_dtype())
         return np.asarray(num_wheels_off * (~jump_in_progress).astype(get_global_dtype()), dtype=get_global_dtype())
 
-    def _reward_collision(self, ctx: RewardContext) -> np.ndarray:
-        """主动碰撞惩罚：统计有多少个 penalised 刚体接触地面（轮子除外）。
+    def _reward_wheel_air_height(self, ctx: RewardContext) -> np.ndarray:
+        """轮子离地高度奖励：跳窗口内两轮离地时，轮底越高奖励越大（线性 0 → 1）。
 
-        接触力 > 1.0N 视为发生碰撞，每个碰撞刚体贡献 1.0 分原始惩罚。
-        经 reward dispatch 乘 scale(-1.0) 和 ctrl_dt(0.008s) 后，
-        每步每碰撞体实际惩罚 ≈ -0.008，累积效应随时间线性增长。
+        与 flight 同门控（``jump_in_progress``），区别是 **连续** 而不是二值：
+        flight 只区分"在空中/不在地面"，这一项给出"还能更高"的梯度。
+        门控同时挡掉复位空投：``_jump_cooldown`` 复位后 100 步内不允许跳，
+        而下落只需 ~17 步，所以开局不会白拿分。
 
-        当前 penalised 刚体（15 个）：
-          - base_box                          (机体)
-          - left_front_leg_geom               (前腿左)
-          - left_front_child1_leg_geom        (前腿左 child1)
-          - left_front_leg_geom1              (前腿左 child2 连接段)
-          - left_rear_child1_leg_geom2        (后腿左 child1 下半段)
-          - left_rear_leg_geom1               (后腿左)
-          - left_rear_leg_geom2               (后腿左)
-          - left_rear_child1_leg_geom1        (后腿左 child1)
-          - right_front_leg_geom              (前腿右)
-          - right_front_child1_leg_geom       (前腿右 child1)
-          - right_front_leg_geom1             (前腿右 child2 连接段)
-          - right_rear_child1_leg_geom2       (后腿右 child1 下半段)
-          - right_rear_leg_geom1              (后腿右)
-          - right_rear_leg_geom2              (后腿右)
-          - right_rear_child1_leg_geom1       (后腿右 child1)
-
-        设计意图：碰撞惩罚不追求"一步罚死"，而是通过持续累积
-        让策略形成"远离地面"的行为习惯，配合 orientation 的姿态惩罚
-        形成"姿态 + 接触"双重防护。
+        轮底高度取 ``wheel_world_z``（两轮中较低者），因此必须**两轮同时离地**
+        才给分，单轮抬起不算。低于 ``wheel_air_margin`` 时为 0，
+        高于 ``wheel_air_full_height`` 时饱和为 1。
         """
-        threshold = 1.0  # N
+        dtype = get_global_dtype()
+        rc = self._cfg.reward_config
+        jump_in_progress = np.asarray(
+            ctx.info.get("jump_in_progress", np.zeros(ctx.num_envs, dtype=bool)), dtype=bool
+        )
+        wheel_z = np.asarray(
+            ctx.info.get("wheel_world_z", np.zeros(ctx.num_envs)), dtype=dtype
+        )
+        # wheel_world_z 是轮底的**世界 z**，减去地面高度才是真正的离地高度。
+        # 不能用 base_z - base_height_above_ground 反推：那个量含 hip_z(0.141)
+        # 的偏移，平地时会算出 -0.141 的"地面"。
+        ground_z = np.asarray(
+            ctx.info.get("ground_z", np.zeros(ctx.num_envs)), dtype=dtype
+        )
+        wheel_h = wheel_z - ground_z
+        margin = float(getattr(rc, "wheel_air_margin", 0.02))
+        full_h = float(getattr(rc, "wheel_air_full_height", 0.20))
+        span = max(full_h - margin, 1e-6)
+        ratio = np.clip((wheel_h - margin) / span, 0.0, 1.0)
+        return np.asarray(ratio * jump_in_progress.astype(dtype), dtype=dtype)
+
+    def _reward_collision(self, ctx: RewardContext) -> np.ndarray:
+        """主动碰撞惩罚：统计多少个 penalised 刚体接触地面（轮子除外）。
+
+        对齐复旦原版：`penalize_contacts_on = ["lf", "rf", "base"]`，阈值 ‖F‖ > 0.1 N。
+        复旦用子串匹配 URDF 刚体名，`lf` 命中的是 lf0_Link + lf1_Link 两条前腿连杆，
+        `rf` 同理，`base` 命中 base_link。故共 5 个刚体，每个贡献 1.0 原始惩罚：
+          base_link / left_front_link(lf0) / left_front_child1_link(lf1) /
+          right_front_link(rf0) / right_front_child1_link(rf1)
+        """
+        threshold = 0.1  # N（复旦原版 contact_forces > 0.1）
         info = ctx.info
         penalised = [
             np.asarray(info["base_body_contact_force"], dtype=get_global_dtype()).flatten(),
             np.asarray(info["left_front_leg_contact_force"], dtype=get_global_dtype()).flatten(),
             np.asarray(info["left_front_child1_leg_contact_force"], dtype=get_global_dtype()).flatten(),
-            np.asarray(info["left_front_leg1_contact_force"], dtype=get_global_dtype()).flatten(),
-            np.asarray(info["left_rear_child1_leg2_contact_force"], dtype=get_global_dtype()).flatten(),
-            np.asarray(info["left_rear_leg_contact_force"], dtype=get_global_dtype()).flatten(),
-            np.asarray(info["left_rear_leg2_contact_force"], dtype=get_global_dtype()).flatten(),
-            np.asarray(info["left_rear_child1_leg1_contact_force"], dtype=get_global_dtype()).flatten(),
             np.asarray(info["right_front_leg_contact_force"], dtype=get_global_dtype()).flatten(),
             np.asarray(info["right_front_child1_leg_contact_force"], dtype=get_global_dtype()).flatten(),
-            np.asarray(info["right_front_leg1_contact_force"], dtype=get_global_dtype()).flatten(),
-            np.asarray(info["right_rear_child1_leg2_contact_force"], dtype=get_global_dtype()).flatten(),
-            np.asarray(info["right_rear_leg_contact_force"], dtype=get_global_dtype()).flatten(),
-            np.asarray(info["right_rear_leg2_contact_force"], dtype=get_global_dtype()).flatten(),
-            np.asarray(info["right_rear_child1_leg1_contact_force"], dtype=get_global_dtype()).flatten(),
         ]
-        stacked = np.stack(penalised, axis=-1)  # (N, 15)
+        stacked = np.stack(penalised, axis=-1)  # (N, 5)
         return (stacked > threshold).astype(get_global_dtype()).sum(axis=-1)  # (N,)
     def _reward_vertex_penalty(self, ctx: RewardContext) -> np.ndarray:
         """机体接触惩罚：步数越多扣越多。"""
@@ -2040,15 +2201,33 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         return np.asarray(raw, dtype=get_global_dtype())
 
     def _reward_base_height_precise(self, ctx: RewardContext) -> np.ndarray:
+        """高度精确奖励：目标 = commands[:, 3]。
+
+        跳跃回合内的"释放"条件用「已离地 或 已开始蹬伸」，而不是「高度超过阈值」：
+          - 还在地面且没在上升（~was_in_flight & vz<=vz_threshold）
+            → 按高度目标塑造，必须真的蹲到 commands[:,3] 才拿分。
+              跳跃时 commands[:,3] 被约束在 0.2~0.3，所以这一段就是"收腿蓄力"的驱动力。
+          - 已离地 / 已在蹬伸（was_in_flight | vz>vz_threshold）
+            → 释放为 1.0，飞行高度不设限，下降段也不挨罚。
+
+        为什么不能按高度释放（原实现 actual>=jump_launch_height → 1.0）：
+        机器人站在 0.35、vz≈0 时也会被判成"已超过起跳高度"直接拿满分，
+        于是蹲下去蓄力反而净亏，该项完全驱动不了收腿，[0.2,0.3] 的高度约束形同虚设。
+        """
         rc = self._cfg.reward_config
         sigma = float(getattr(rc, "base_height_sigma", 0.10)) / 3.0
         actual_height = np.asarray(ctx.info["base_height_above_ground"], dtype=get_global_dtype())
         target_height = np.asarray(ctx.info["commands"][:, 3], dtype=get_global_dtype())
-        release_height = float(getattr(rc, "jump_launch_height", 0.25))
         err = actual_height - target_height
         phi = np.exp(-np.square(err) / (sigma * sigma))
+
+        # ── 跳跃回合：地面蓄力段按目标塑造，离地/蹬伸后释放 ──
         jump_in_progress = np.asarray(ctx.info.get("jump_in_progress", np.zeros(ctx.num_envs, dtype=bool)), dtype=bool)
-        phi = np.where(jump_in_progress & (actual_height >= release_height), 1.0, phi)
+        was_in_flight = np.asarray(ctx.info.get("was_in_flight", np.zeros(ctx.num_envs, dtype=bool)), dtype=bool)
+        vz_thr = float(getattr(rc, "vz_threshold", 0.15))
+        world_z_vel = ctx.linvel[:, 2]
+        released = jump_in_progress & (was_in_flight | (world_z_vel > vz_thr))
+        phi = np.where(released, 1.0, phi)
         return np.asarray(phi, dtype=get_global_dtype())
 
     def _reward_body_corner_clearance(self, ctx: RewardContext) -> np.ndarray:
@@ -2152,13 +2331,12 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         """
         commands = ctx.info["commands"]
         vx = ctx.info["body_vx"]
-        vy = ctx.info["body_vy"]
         gravity_body = ctx.info["gravity_body"]
         cos_pitch = np.cos(np.arcsin(np.clip(gravity_body[:, 0], -1.0, 1.0)))
         vx_horiz = vx * cos_pitch
-        lin_vel_error = np.square(commands[:, 0] - vx_horiz) + np.square(commands[:, 1] - vy)
+        lin_vel_error = np.square(commands[:, 0] - vx_horiz)
         sigma_base = ctx.tracking_sigma_lin if ctx.tracking_sigma_lin is not None else ctx.tracking_sigma
-        sigma = np.maximum(sigma_base * sigma_base, sigma_base * np.square(commands[:, 0])) if ctx.tracking_sigma_dynamic else sigma_base * sigma_base
+        sigma = np.maximum(sigma_base * sigma_base, sigma_base * np.square(commands[:, 0])) if ctx.tracking_sigma_dynamic else sigma_base
         raw = np.exp(-lin_vel_error / sigma)
         return np.asarray(raw, dtype=get_global_dtype())
 
@@ -2172,22 +2350,25 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         commands = ctx.info["commands"]
         ang_vel_error = np.square(commands[:, 2] - ctx.gyro[:, 2])
         sigma_base = ctx.tracking_sigma_ang if ctx.tracking_sigma_ang is not None else ctx.tracking_sigma
-        sigma = np.maximum(sigma_base * sigma_base, sigma_base * np.square(commands[:, 2])) if ctx.tracking_sigma_dynamic else sigma_base * sigma_base
+        sigma = np.maximum(sigma_base * sigma_base, sigma_base * np.square(commands[:, 2])) if ctx.tracking_sigma_dynamic else sigma_base
         raw = np.exp(-ang_vel_error / sigma)
         return np.asarray(raw, dtype=get_global_dtype())
 
     def _reward_tracking_lin_vel_precise(self, ctx: RewardContext) -> np.ndarray:
-        """精度加强版线速度追踪：σ = 原 σ / 10，对微小误差更敏感。"""
+        """精度加强版线速度追踪：σ = 原 σ / 10，对微小误差更敏感。
+
+        对齐复旦 `tracking_lin_vel_enhance`：(exp(-err²/(σ/10)) - 1) * 2，恒 ≤ 0，
+        误差小 → 接近 0，误差大 → 趋向 -2。
+        """
         commands = ctx.info["commands"]
         vx = ctx.info["body_vx"]
-        vy = ctx.info["body_vy"]
         gravity_body = ctx.info["gravity_body"]
         cos_pitch = np.cos(np.arcsin(np.clip(gravity_body[:, 0], -1.0, 1.0)))
         vx_horiz = vx * cos_pitch
-        lin_vel_error = np.square(commands[:, 0] - vx_horiz) + np.square(commands[:, 1] - vy)
+        lin_vel_error = np.square(commands[:, 0] - vx_horiz)
         sigma_base = (ctx.tracking_sigma_lin if ctx.tracking_sigma_lin is not None else ctx.tracking_sigma) / 10.0
-        sigma = np.maximum(0.25 * 0.25, sigma_base * np.square(commands[:, 0])) if ctx.tracking_sigma_dynamic else sigma_base * sigma_base
-        raw = np.exp(-lin_vel_error / sigma)
+        sigma = np.maximum(0.25 * 0.25, sigma_base * np.square(commands[:, 0])) if ctx.tracking_sigma_dynamic else sigma_base
+        raw = (np.exp(-lin_vel_error / sigma) - 1.0) * 2.0
         return np.asarray(raw, dtype=get_global_dtype())
 
     def _reward_tracking_lin_vel_quad(self, ctx: RewardContext) -> np.ndarray:
@@ -2198,11 +2379,10 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         """
         commands = ctx.info["commands"]
         vx = ctx.info["body_vx"]
-        vy = ctx.info["body_vy"]
         gravity_body = ctx.info["gravity_body"]
         cos_pitch = np.cos(np.arcsin(np.clip(gravity_body[:, 0], -1.0, 1.0)))
         vx_horiz = vx * cos_pitch
-        lin_vel_error = np.square(commands[:, 0] - vx_horiz) + np.square(commands[:, 1] - vy)
+        lin_vel_error = np.square(commands[:, 0] - vx_horiz)
         return np.asarray(lin_vel_error, dtype=get_global_dtype())
 
     def _reward_tracking_ang_vel_precise(self, ctx: RewardContext) -> np.ndarray:
@@ -2210,7 +2390,7 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         commands = ctx.info["commands"]
         ang_vel_error = np.square(commands[:, 2] - ctx.gyro[:, 2])
         sigma_base = (ctx.tracking_sigma_ang if ctx.tracking_sigma_ang is not None else ctx.tracking_sigma) / 10.0
-        sigma = np.maximum(0.25 * 0.25, sigma_base * np.square(commands[:, 2])) if ctx.tracking_sigma_dynamic else sigma_base * sigma_base
+        sigma = np.maximum(0.25 * 0.25, sigma_base * np.square(commands[:, 2])) if ctx.tracking_sigma_dynamic else sigma_base
         raw = np.exp(-ang_vel_error / sigma)
         return np.asarray(raw, dtype=get_global_dtype())
 
@@ -2231,28 +2411,15 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         return np.asarray(raw, dtype=get_global_dtype())
 
     def _reward_swing_vertical(self, ctx: RewardContext) -> np.ndarray:
-        """腿杆偏离动态目标摆角的惩罚（加姿态门控）。
+        """腿杆摆角归零惩罚，等同复旦原版 pen_theta_no0 = Σθ0²。
 
-        用绝对值而不是平方——平方在弧度小时惩罚太小，方向反了几乎感觉不到。
-        姿态门控：tilt > 10° / theta_err > 8° / base_z < 0.28 → 姿态不稳，
-        降低摆腿惩罚强度（×0.6），让它先回正再去追摆角目标，
-        避免"前倾时被 swing_vertical 钉死在错误姿态上"。
+        swing_target_theta 恒为 0，故 raw = θ_rw² + θ_lw²（无门控、无动态目标）。
         """
-        err_rw = ctx.info["swing_err_rw"]
-        err_lw = ctx.info["swing_err_lw"]
-        raw = np.abs(err_rw) + np.abs(err_lw)
+        err_rw = np.asarray(ctx.info["swing_err_rw"], dtype=get_global_dtype())
+        err_lw = np.asarray(ctx.info["swing_err_lw"], dtype=get_global_dtype())
+        raw = np.square(err_rw) + np.square(err_lw)
 
-        _tilt = ctx.info["tilt"]
-        _theta_err = ctx.info["theta_err"]
-        _base_z = ctx.info["base_z"]
-        _target_z = ctx.info["commands"][:, 3]
-        _height_sigma = float(getattr(self._cfg.reward_config, "base_height_sigma", 0.05)) * 0.7
-        posture_gate, _, _, _ = self._soft_posture_gate(
-            _tilt, _theta_err, _base_z, _target_z, low=2.5, high=0.5,
-            swing_center=10.0, swing_width=6.0, height_low_width=_height_sigma,
-        )
-
-        return np.asarray(raw * posture_gate, dtype=get_global_dtype())
+        return np.asarray(raw, dtype=get_global_dtype())
 
 
     @staticmethod
@@ -2295,7 +2462,10 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         return np.asarray(ctx.info["swing_vel_sq"], dtype=get_global_dtype())
 
     def _reward_swing_symmetry(self, ctx: RewardContext) -> np.ndarray:
-        """左右腿不对称惩罚（1-exp(-(θ_r-θ_l)²/0.1)，对称→0，不对称→1；配合负 scale）。"""
+        """左右腿不对称惩罚（1-exp(-(θ_r-θ_l)²/0.1)，对称→0，不对称→1；配合负 scale）。
+
+        对应复旦原版 `nominal_state` 的"左右对称"部分（复旦另有 10×(L0l-L0r)² 腿长差项）。
+        """
         rw_theta = ctx.info["swing_rw_theta"]
         lw_theta = ctx.info["swing_lw_theta"]
         ang_diff = np.square(rw_theta - lw_theta)
@@ -2382,9 +2552,10 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         current = np.asarray(ctx.info["current_actions"], dtype=get_global_dtype())
         last = np.asarray(ctx.info["last_actions"], dtype=get_global_dtype())
         second_last = np.asarray(
-            ctx.info.get("_action_t2", np.zeros_like(current)),
+            ctx.info.get("_prev2_actions", np.zeros_like(current)),
             dtype=get_global_dtype(),
         )
+        # 一阶用 last_actions (a_{t-1})，二阶用 _prev2_actions (a_{t-2})，同为真实动作
         diff = current[:, :4] - 2 * last[:, :4] + second_last[:, :4]
         return np.asarray(np.sum(np.square(diff), axis=1), dtype=get_global_dtype())
 
@@ -2418,18 +2589,20 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
             self._landing_air_time[first_contact] = self._base_air_time[first_contact].copy()
             self._base_air_time[first_contact] = 0.0
 
-        # Reward: landing air-time bonus + upward velocity (anti-oscillation) + ground push force
+        # 复旦原版：落地结算 + 0.15·max(0, vz)，没有向下速度惩罚
         rew = (self._landing_air_time - 5e-5) * first_contact.astype(dtype) * 0.15
-        rew_up = np.maximum(0.0, world_z_vel)
-        # Down penalty grace: exempt during flight + N steps after landing
-        if not hasattr(self, '_down_penalty_timer'):
-            self._down_penalty_timer = np.zeros(ctx.num_envs, dtype=np.int32)
-        grace_steps = max(int(round(0.2 / float(self._cfg.ctrl_dt))), 1)
-        self._down_penalty_timer[first_contact] = grace_steps
-        self._down_penalty_timer = np.maximum(0, self._down_penalty_timer - 1)
-        in_grace = was_in_flight | (self._down_penalty_timer > 0)
-        rew_down = np.where(in_grace, 0.0, np.maximum(0.0, -world_z_vel) * 0.2)
-        rew += (rew_up - rew_down) * jump_in_progress.astype(dtype)
+        # 上升速度项：把铰链 max(0, vz) 换成 tanh（本环境扩展，非复旦原逻辑）。
+        # 铰链在 vz<=0 处值与梯度**同时为 0**，机器人"还没起跳"时这项给不出任何梯度
+        # （实测 vz_up|J=0.029 → 贡献仅 0.0087/步，而 tracking_lin_vel 是 1.13/步）。
+        # tanh(k·vz) 的三个性质正好对上需求：
+        #   1) vz=0 处斜率最大 = k        → "0 位置也有梯度"
+        #   2) 值域夹在 [-0.2, 1]          → 有界，权重再大也会饱和，不会过冲
+        #   3) vz<0 一侧只轻罚到 -0.2      → 不惩罚起跳后必要的落地下沉
+        # k=2：拐点落在 vz≈1.0~1.5（一次真跳的物理上限），
+        #      vz<0.5 区间梯度都比铰链(0.3)强，vz>0.8 才开始饱和 → 不会抑制"蹬更狠"。
+        #      k 取 5 会太早饱和（vz=0.3 就顶满），机器人到 0.3 m/s 就不想再加速了。
+        vz_term = np.maximum(np.tanh(2.0 * world_z_vel), -0.2)
+        rew += vz_term * jump_in_progress.astype(dtype)
 
         ctx.info["landing_jump"] = first_contact.copy()
         ctx.info["landing_air_time"] = self._landing_air_time.copy()
@@ -2490,7 +2663,7 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         crash = jump_in_progress & (~was_in_flight) & (base_contact > 1.0)
         return np.asarray(crash.astype(dtype), dtype=dtype)
     def _reward_jump_failure(self, ctx: RewardContext) -> np.ndarray:
-        """cmd_jump=1 + base_z > 0.25 + z_vel < 0.15 持续 0.5s → 1.0 原始惩罚（通过 YAML 权重转为负）。"""
+        """cmd_jump=1 + base_z > 0.25 + z_vel < vz_threshold 持续 0.5s → 1.0 原始惩罚（通过 YAML 权重转为负）。"""
         dtype = get_global_dtype()
         jump_in_progress = np.asarray(ctx.info.get("jump_in_progress", np.zeros(ctx.num_envs, dtype=bool)), dtype=bool)
         was_in_flight = np.asarray(ctx.info.get("was_in_flight", np.zeros(ctx.num_envs, dtype=bool)), dtype=bool)
@@ -2499,7 +2672,7 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         if not hasattr(self, '_jump_extend_timer'):
             self._jump_extend_timer = np.zeros(ctx.num_envs, dtype=np.int32)
         extended = (base_z > 0.25) & jump_in_progress
-        no_vz = world_z_vel < 0.15
+        no_vz = world_z_vel < float(getattr(self._cfg.reward_config, "vz_threshold", 0.15))
         in_failure_zone = extended & no_vz & (~was_in_flight)
         self._jump_extend_timer += 1
         self._jump_extend_timer[~in_failure_zone] = 0
@@ -2577,8 +2750,8 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         return np.asarray(landing_air_time * landing_jump.astype(get_global_dtype()), dtype=get_global_dtype())
 
     def _reward_takeoff_extend(self, ctx: RewardContext) -> np.ndarray:
-        """蹬地伸腿：contact & z_vel > 0.15 → L₀→0.32 (exp(-err*4))。
-        仅地面蹬地阶段生效，离地后自动停，与 leg_tuck 不冲突。Fudan style。
+        """蹬地伸腿：contact & z_vel > vz_threshold → L₀→0.31 (exp(-Σ|L₀-0.31|*4))。
+        仅地面蹬地阶段生效，离地后自动停，与 leg_tuck 不冲突。对着复旦 takeoff_extend。
         """
         dtype = get_global_dtype()
         jump_in_progress = np.asarray(ctx.info.get("jump_in_progress", np.zeros(ctx.num_envs, dtype=bool)), dtype=bool)
@@ -2588,27 +2761,42 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         leg_l = np.asarray(ctx.info["leg_l"], dtype=dtype)
         leg_r = np.asarray(ctx.info["leg_r"], dtype=dtype)
 
-        target_l0 = 0.32
+        target_l0 = 0.31
         l0_err = np.abs(leg_l - target_l0) + np.abs(leg_r - target_l0)
 
-        # Ground push-off: contact & vz>0.15
-        takeoff_mask = jump_in_progress & contact & (z_vel > 0.15)
+        # Ground push-off: contact & vz 超过通用门控
+        takeoff_mask = jump_in_progress & contact & (z_vel > float(getattr(self._cfg.reward_config, "vz_threshold", 0.15)))
         if not np.any(takeoff_mask):
             return np.zeros(ctx.num_envs, dtype=dtype)
 
-        raw = np.exp(-l0_err * 4.0) * np.minimum(np.maximum(0.0, z_vel - 0.15), 2.0)
+        raw = np.exp(-l0_err * 4.0)
         return np.asarray(takeoff_mask.astype(dtype) * raw, dtype=dtype)
 
     def _reward_leg_tuck(self, ctx: RewardContext) -> np.ndarray:
-        """空中收腿奖励：was_in_flight → L₀→0.16 (exp(-err * 4.0)). Fudan exact copy."""
+        """空中收腿奖励：L₀→0.17 (exp(-err * 4.0))。
+
+        门控 = jump_in_progress & (was_in_flight | 起跳窗口)，其中
+        起跳窗口 = (base_h > 0.33) & (vz > 0.2)，用来去掉 was_in_flight 的两步去抖。
+        """
         dtype = get_global_dtype()
         jump_in_progress = np.asarray(ctx.info.get("jump_in_progress", np.zeros(ctx.num_envs, dtype=bool)), dtype=bool)
         was_in_flight = np.asarray(ctx.info.get("was_in_flight", np.zeros(ctx.num_envs, dtype=bool)), dtype=bool)
         leg_l = np.asarray(ctx.info["leg_l"], dtype=dtype)
         leg_r = np.asarray(ctx.info["leg_r"], dtype=dtype)
 
-        leg_tuck_err = (leg_l - 0.16) + (leg_r - 0.16)
-        raw = np.exp(-leg_tuck_err * 4.0) * (jump_in_progress & was_in_flight).astype(dtype)
+        # 起跳窗口：高且仍在上升 → 零延迟开启（不必等 was_in_flight 的两步去抖）。
+        # 地面蹬伸段几乎不会满足（实测 52 步中仅 5 步着地），故不与 takeoff_extend 冲突。
+        base_h = np.asarray(ctx.info.get("base_height_above_ground", np.zeros(ctx.num_envs)), dtype=dtype)
+        z_vel = ctx.linvel[:, 2]
+        reach_h = float(getattr(self._cfg, "leg_tuck_reach_height", 0.32))
+        reach_vz = float(getattr(self._cfg, "leg_tuck_reach_vz", 0.20))
+        takeoff_window = (base_h > reach_h) & (z_vel > reach_vz)
+
+        leg_tuck_err = np.abs(leg_l - 0.17) + np.abs(leg_r - 0.17)
+        active = jump_in_progress & (was_in_flight | takeoff_window)
+        # 复旦原形状 exp(-err*4)，权重取复旦 1.7 的 3 倍（5.1），
+        # 与其余跳跃项（复旦 ×3）保持同一比例。
+        raw = np.exp(-leg_tuck_err * 4.0) * active.astype(dtype)
         return np.asarray(raw, dtype=dtype)
 
     def _reward_jump_vz(self, ctx: RewardContext) -> np.ndarray:
@@ -2627,10 +2815,8 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         return np.asarray(reward, dtype=get_global_dtype())
 
     def _reward_orientation(self, ctx: RewardContext) -> np.ndarray:
-        raw = common_rewards.orientation(ctx)
-        was_in_flight = np.asarray(ctx.info.get("was_in_flight", np.zeros(ctx.num_envs, dtype=bool)), dtype=bool)
-        raw[was_in_flight] *= 0.5
-        return raw
+        # 复旦原版：Σ g_xy²，空中不额外打折
+        return np.asarray(common_rewards.orientation(ctx), dtype=get_global_dtype())
 
     def _reward_pitch(self, ctx: RewardContext) -> np.ndarray:
         g = ctx.gravity
@@ -2782,6 +2968,29 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         - 调用 zero_small_xy_commands + rel_standing_envs 与 reset 时保持一致
         """
         if getattr(self, "_play_mode", False):
+            # play 模式不重采样命令。H 键把 _play_jump_steps 置成保持步数，这里每步
+            # 维持 cmd_jump=1 并递减，到期自动清零；落地时 play 脚本会把计数直接置 0，
+            # 从而实现“按一次只跳一次”。
+            _cmds = info.get("commands")
+            if _cmds is not None and _cmds.shape[1] >= 5:
+                _left = int(getattr(self, "_play_jump_steps", 0))
+                if _left > 0:
+                    # 起跳边沿：与训练保持一致，把越界的高度目标夹回 jump_stand_height_range。
+                    # 训练在发出跳跃命令时会把 commands[:,3] 重采样进该区间；play 若不照做，
+                    # 策略就会在"cmd_jump=1 但高度目标 0.35+"这种训练中不存在的组合下起跳，
+                    # 表现为不蹲、不收腿。
+                    _edge = _cmds[:, 4] < 0.5
+                    if np.any(_edge):
+                        _jr = getattr(self._cfg.reward_config, "jump_stand_height_range", None)
+                        if _jr is None:
+                            _s = float(getattr(self._cfg.reward_config, "jump_stand_height", 0.2))
+                            _jr = (_s, _s)
+                        _lo, _hi = float(_jr[0]), float(_jr[1])
+                        _cmds[_edge, 3] = np.clip(_cmds[_edge, 3], _lo, _hi)
+                    _cmds[:, 4] = 1.0
+                    self._play_jump_steps = _left - 1
+                else:
+                    _cmds[:, 4] = 0.0
             return
         dtype = get_global_dtype()
         n = self._num_envs
@@ -2889,8 +3098,25 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
                         qualified = (height_err < h_err_max) & (vel_err < vel_err_max)
                         jump[cd_ready] = qualified.astype(dtype)[:, None]
                         if np.any(qualified):
-                            jump_stand_h_val = float(getattr(self._cfg.reward_config, "jump_stand_height", 0.2))
-                            commands[ready_subset[qualified], 3] = jump_stand_h_val
+                            # 进入跳跃：该 env 的高度目标重采样到 jump_stand_height_range。
+                            # 必须写 height 数组 —— 下面 new_cmd_5d 会整行覆盖 commands[row]，
+                            # 直接写 commands[:, 3] 会被那次覆盖抹掉（旧代码就是这样失效的）。
+                            _jr = getattr(self._cfg.reward_config, "jump_stand_height_range", None)
+                            if _jr is None:
+                                _jr = (float(getattr(self._cfg.reward_config, "jump_stand_height", 0.2)),) * 2
+                            _loc = np.where(cd_ready)[0][qualified]
+                            _lo, _hi = float(_jr[0]), float(_jr[1])
+                            # 判定对象是"进入跳跃前该 env 当前的高度任务"(commands[:,3])，
+                            # 不是上面刚随机出来的 height：已在 [_lo,_hi] 内的保持原值，
+                            # 只有越界的才重采样进区间，避免起跳瞬间无谓地拽一下高度命令。
+                            _h_cur = np.asarray(commands[ready_subset[qualified], 3], dtype=dtype).copy()
+                            _out = (_h_cur < _lo) | (_h_cur > _hi)
+                            if np.any(_out):
+                                _h_cur[_out] = np.asarray(
+                                    np.random.uniform(_lo, _hi, size=int(_out.sum())),
+                                    dtype=dtype,
+                                )
+                            height[_loc, 0] = _h_cur
 
                 new_cmd_5d = np.concatenate([new_cmd, height, jump], axis=1)
                 commands[resample_mask] = new_cmd_5d
@@ -2899,9 +3125,12 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
 
         # landing → 清零 cmd_jump, 重设 cooldown
         landing = np.asarray(info.get("landing_jump", np.zeros(n, dtype=bool)), dtype=bool)
-        if np.any(landing):
-            self._jump_cooldown[landing] = 0
-            commands[landing, 4] = 0.0
+        # 只认“真落地”（连续离地 >= 5 步）；1~4 步的地面抖动既不重置 cooldown，
+        # 也不清跳命令，否则 cooldown 永远攒不到 jump_delay_steps，跳跃命令发不出来。
+        real_landing = landing & (self._air_last >= 5)
+        if np.any(real_landing):
+            self._jump_cooldown[real_landing] = 0
+            commands[real_landing, 4] = 0.0
 
         # jump failure → 清零 cmd_jump, 重设 cooldown（腿伸直但不跳）
         failure = np.asarray(info.get("jump_failure", np.zeros(n, dtype=bool)), dtype=bool)
@@ -2925,8 +3154,27 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         cmd_jump = commands[:, 4] if commands.shape[1] >= 5 else np.zeros(self._num_envs)
         has_jump_cmd = cmd_jump > 0.5
 
+        # ── 判定 ≠ 进入跳跃 ──────────────────────────────────────────
+        # cmd_jump=1 只是"待跳"：此时高度目标已被约束到 [0.2,0.3]，而 jump_in_progress
+        # 仍为 False，所以 base_height(-1.5) 惩罚照常生效，机器人会被拉下去蓄力。
+        # 只有 base_height 真降进固定区间 jump_enter_height_range(默认 0.20~0.30)，
+        # 才置 jump_in_progress=True，那一刻才释放 base_height、激活 encourage_jump / leg_tuck 等。
+        # 命令被清零（落地/失败/重采样）→ 复位，下一轮判定重新走一遍。
+        # 注：base_height_above_ground 在 _populate_info 里赋值（本函数之后），
+        #     这里读到的是上一步的值，1 个 ctrl_dt 的延迟对蓄力触发无影响。
+        base_h = np.asarray(
+            info.get("base_height_above_ground", np.zeros(self._num_envs, dtype=self._np_dtype)),
+            dtype=self._np_dtype,
+        )
+        # 进入判据用固定高度区间，与 height_cmd 具体是多少无关
+        _enter_rng = getattr(self._cfg.reward_config, "jump_enter_height_range", (0.20, 0.30))
+        enter_lo, enter_hi = float(_enter_rng[0]), float(_enter_rng[1])
+        enter_now = has_jump_cmd & (~self._jump_entered) & (base_h >= enter_lo) & (base_h <= enter_hi)
+        self._jump_entered |= enter_now
+        self._jump_entered &= has_jump_cmd
+
         info["jump_active"] = has_jump_cmd & self.was_in_flight
-        info["jump_in_progress"] = has_jump_cmd
+        info["jump_in_progress"] = has_jump_cmd & self._jump_entered
         info["commands"] = commands
 
     def _check_flight(self, sensors: dict, info: dict) -> None:
@@ -2944,10 +3192,17 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         self._last_contacts = contact.copy()
         was_in_flight_prev = self.was_in_flight.copy() if hasattr(self, 'was_in_flight') and len(self.was_in_flight) > 0 else np.zeros(self._num_envs, dtype=bool)
         self.was_in_flight[:] = False
-        wheels_off = np.all(~self._contact_filt, axis=1)
+        # 去抖 2 步 → 1 步：只用本步接触判定（不再 OR 上一步），腾空判定提前 1 步，
+        # 让 leg_tuck / line_z / flight 等 was_in_flight 门控的奖励早一步亮。
+        # contact_filt 仍然保留供 takeoff_extend 使用。
+        wheels_off = np.all(~contact, axis=1)
         body_cf = sensors.get("base_body_contact_force", np.zeros(self._num_envs)).flatten()
         body_off = body_cf < 1e-3
-        self.was_in_flight[wheels_off & body_off] = True
+        off_now = wheels_off & body_off
+        # 连续离地步数；落地那一步 off_now=False，_air_last 保留“这一段一共离地几步”
+        self._air_streak = np.where(off_now, self._air_streak + 1, 0).astype(np.int32)
+        self._air_last = np.where(off_now, self._air_streak, self._air_last).astype(np.int32)
+        self.was_in_flight[off_now] = True
 
         body_h = np.asarray(info.get("base_height_above_ground", np.zeros(self._num_envs)), dtype=get_global_dtype())
         if not hasattr(self, '_flight_height_max'):
@@ -2986,7 +3241,13 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
                 self._aj_cooldown = np.zeros(n, dtype=np.int32)
                 self._aj_hold_timer = np.zeros(n, dtype=np.int32)
             self._aj_cooldown += 1
-            aj_delay = max(int(round(1.0 / float(self._cfg.ctrl_dt))), 1)
+            aj_cfg = self._cfg.commands
+            aj_delay = max(
+                int(round(float(getattr(aj_cfg, "auto_jump_cooldown", 1.0)) / float(self._cfg.ctrl_dt))), 1
+            )
+            aj_hold_steps = max(
+                int(round(float(getattr(aj_cfg, "auto_jump_hold_time", 0.4)) / float(self._cfg.ctrl_dt))), 1
+            )
             rf = np.asarray(
                 self._backend.get_sensor_data(self._cfg.sensor.base_height_rangefinder),
                 dtype=dtype,
@@ -3003,8 +3264,8 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
                 cmds = state.info["commands"]
                 cmds[aj_mask, 4] = 1.0
                 self._aj_cooldown[aj_mask] = 0
-                self._aj_hold_timer[aj_mask] = max(int(round(0.4 / float(self._cfg.ctrl_dt))), 1)
-            # hold timer: 1s 后自动清零 cmd_jump
+                self._aj_hold_timer[aj_mask] = aj_hold_steps
+            # hold timer 到期后自动清零 cmd_jump
             holding = self._aj_hold_timer > 0
             self._aj_hold_timer[holding] -= 1
             just_expired = holding & (self._aj_hold_timer <= 0)
@@ -3250,6 +3511,25 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         """保留兼容接口，实际不再使用传感器数据。"""
         return rw, lw
 
+    def _term_loosen_active(self, rc: Any) -> bool:
+        """课程完成后是否收敛终止：True 时只剩 tilt（翻车）+ 地形出界终止。
+
+        ``term_loosen_from_step`` 用控制步计数（``self.step_counter``，每 iter =
+        ``num_steps_per_env`` 步；0 = 立即生效）。首次生效打印一次，便于在日志里定位切换点。
+        """
+        if not getattr(rc, "term_loosen_enabled", False):
+            return False
+        active = int(self.step_counter) >= int(getattr(rc, "term_loosen_from_step", 0))
+        if active and not self._term_loosened:
+            self._term_loosened = True
+            print(
+                f"[TERM] 课程完成收敛 step={int(self.step_counter)} → 只保留 tilt 终止："
+                f"tilt>{float(rc.tilt_limit_tight):.3f}rad"
+                f"（vertex_touch / swing / min_height 三种姿态终止已关闭，地形出界仍生效）",
+                flush=True,
+            )
+        return active
+
     def _detect_termination(self, gravity_body: np.ndarray, base_pos: np.ndarray, base_body_contact_force: np.ndarray, commands: np.ndarray, upvector: np.ndarray, local_linvel: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         rc = self._cfg.reward_config
         tilt = np.arccos(np.clip(gravity_body[:, 2], 0.0, 1.0))
@@ -3274,24 +3554,16 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         self._height_low_count = np.where(height_collapse, self._height_low_count + 1, 0)
         self._swing_count = np.where(swing_too_high, self._swing_count + 1, 0)
 
-        # ── 速度跟踪终止：|vx| / |cmd_vx| < vel_track_ratio_threshold 且 |cmd_vx| > vel_track_min_cmd ──
-        cmd_vx = commands[:, 0]
-        vx = local_linvel[:, 0]
-        vel_track_ratio_threshold = float(getattr(rc, "vel_track_ratio_threshold", 0.3))
-        vel_track_min_cmd = float(getattr(rc, "vel_track_min_cmd", 0.2))
-        vel_track_poor = (
-            (np.abs(cmd_vx) > vel_track_min_cmd)
-            & (np.abs(vx) / (np.abs(cmd_vx) + 1e-6) < vel_track_ratio_threshold)
-            & ~powerless_mask
-        )
-        self._vel_track_count = np.where(vel_track_poor, self._vel_track_count + 1, 0)
-
         # 课程完成后仅翻车终止：机体向上向量有向下分量
         curriculum_done = self._curriculum.scale >= 1.0
         is_flipped = upvector[:, 2] < 0.0
         self._flip_count = np.where(is_flipped, self._flip_count + 1, 0)
 
-        if curriculum_done:
+        # term_loosen_enabled 打开时与其余 balance_infantry env 一致：只保留 tilt 终止
+        term_loosen = self._term_loosen_active(rc)
+        if term_loosen:
+            terminated = (self._tilt_count >= rc.n_steps_delay) & ~powerless_mask
+        elif curriculum_done:
             terminated = (self._flip_count >= rc.n_steps_delay) & ~powerless_mask
         else:
             terminated = (
@@ -3299,7 +3571,6 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
                 | (self._tilt_count >= rc.n_steps_delay)
                 | (self._height_low_count >= rc.n_steps_delay)
                 | (self._swing_count >= rc.n_steps_delay)
-                | (self._vel_track_count >= rc.n_steps_delay)
             ) & ~powerless_mask
 
         if self._cfg.termination_config.terrain_out_of_bounds:
@@ -3319,19 +3590,19 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         self._hit_tilt += int(np.sum(body_tilt_too_high))
         self._hit_height_low += int(np.sum(height_collapse))
         self._hit_swing += int(np.sum(swing_too_high))
-        self._hit_vel_track += int(np.sum(vel_track_poor))
+        
 
         if np.any(terminated):
             self._term_vertex += int(np.sum((self._vertex_touch_count >= rc.n_steps_delay) & terminated))
             self._term_tilt += int(np.sum((self._tilt_count >= rc.n_steps_delay) & terminated))
             self._term_height_low += int(np.sum((self._height_low_count >= rc.n_steps_delay) & terminated))
             self._term_swing += int(np.sum((self._swing_count >= rc.n_steps_delay) & terminated))
-            self._term_vel_track += int(np.sum((self._vel_track_count >= rc.n_steps_delay) & terminated))
+            
 
         if self._term_window_steps >= 200 * n_envs:
-            self._term_vertex = self._term_tilt = self._term_height_low = self._term_swing = self._term_vel_track = 0
+            self._term_vertex = self._term_tilt = self._term_height_low = self._term_swing = 0
             self._term_window_steps = 0
-            self._hit_vertex = self._hit_tilt = self._hit_height_low = self._hit_swing = self._hit_vel_track = 0
+            self._hit_vertex = self._hit_tilt = self._hit_height_low = self._hit_swing = 0
 
         return tilt, base_body_contact_force, terminated
 
@@ -3340,8 +3611,9 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         qacc = (dof_vel - self._last_dof_vel_for_acc) / _dt
         self._last_dof_vel_for_acc[:] = dof_vel
 
-        # 改后
-        swing_vel_sq = self._vmc_phi0_dot[:, 0] ** 2 + self._vmc_phi0_dot[:, 1] ** 2
+        # 用 sitad（theta 差分，已解缠）而不是 phi0_dot：phi0 跨 atan2 分支切点
+        # 时 phi0_dot 会产生 ±2π/sim_dt 的假速度，把该项的均值放大上千倍。
+        swing_vel_sq = self._swing_sitad[:, 0] ** 2 + self._swing_sitad[:, 1] ** 2
 
         if hasattr(self, "_swing_first_step"):
             swing_vel_sq = np.where(self._swing_first_step, 0.0, swing_vel_sq)
@@ -3406,6 +3678,9 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         wheel_world_z = np.minimum(c_left_z, c_right_z)
         g_body = sensors["gravity_body"]
         _scan_base = combined_base_height_from_scan(self)
+        # 地面高度：有地形采样器时是真实地形高度；无采样器（平地）时
+        # _scan_base 回退成 base_z，于是 ground_z 恰为 0。
+        ground_z = sensors["base_pos"][:, 2] - _scan_base
         base_height = _scan_base + 0.141 * sensors["upvector"][:, 2]
         body_corner_min_z = _scan_base - np.abs(g_body[:, 0]) * 0.28 - np.abs(g_body[:, 1]) * 0.14
         theta_err = np.maximum(np.abs(rw_theta - swing_target_theta), np.abs(lw_theta - swing_target_theta))
@@ -3458,6 +3733,7 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
             "leg_l": leg_l,
             "_prev_leg_len": self._prev_leg_len.copy(),
             "wheel_world_z": wheel_world_z,
+            "ground_z": ground_z,
             "tracking_gate": tracking_gate,
             "g_tilt": g_tilt,
             "g_swing": g_swing,
@@ -3470,6 +3746,7 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
             "right_wheel_cf_z": sensors.get("right_wheel_cf_z", np.zeros((self._num_envs, 1))),
             "landing_air_time": self._landing_air_time,
             "_action_t2": self._action_t2.copy(),
+            "_prev2_actions": self._prev2_actions.copy(),
             "_action_t3": self._action_t3.copy(),
             "_base_mass": self._cached_base_mass,
             "_total_mass": self._cached_total_mass,
@@ -3509,8 +3786,9 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         rc = self._cfg.reward_config
         s = rc.scales
         sigma_lin = self._curriculum.tracking_sigma_lin
-        lin_vel_error = np.square(commands[:, 0] - local_linvel[:, 0]) + np.square(commands[:, 1] - local_linvel[:, 1])
-        sigma = np.maximum(sigma_lin * sigma_lin, sigma_lin * np.square(commands[:, 0]))
+        lin_vel_error = np.square(commands[:, 0] - local_linvel[:, 0])
+        # 课程用静态 σ_base；不再对 |cmd|≤1 额外减半，与 tracking_lin_vel 同口径。
+        sigma = sigma_lin
 
         tracking_total = s["tracking_lin_vel"] * np.exp(-lin_vel_error / sigma)
         max_tracking = s["tracking_lin_vel"]
@@ -3796,9 +4074,56 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
         vmc_tau_rr = float(np.mean(vmc_tau[:, 3]))
         print(f"  [torque] rms={float(np.sqrt(np.mean(np.sum(np.square(torques), axis=1)))):+.2f}  rw={float(np.mean(np.abs(torques[:, 5]))):+.2f}  lw={float(np.mean(np.abs(torques[:, 4]))):+.2f}  R_leg={float(np.mean(np.abs(torques[:, 1]))):+.2f}/{float(np.mean(np.abs(torques[:, 3]))):+.2f}  L_leg={float(np.mean(np.abs(torques[:, 0]))):+.2f}/{float(np.mean(np.abs(torques[:, 2]))):+.2f}")
         print(f"  [VMC]   F=({vmc_F_l:+.1f},{vmc_F_r:+.1f})N  T=({vmc_T_l:+.1f},{vmc_T_r:+.1f})N·m  τ_vmc=(LF:{vmc_tau_lf:+.2f},RF:{vmc_tau_rf:+.2f},LR:{vmc_tau_lr:+.2f},RR:{vmc_tau_rr:+.2f})N·m")
-        print(f"  [term]  rate={((self._term_vertex + self._term_tilt + self._term_height_low + self._term_swing + self._term_vel_track) / max(self._term_window_steps, 1) * 1000):.1f}/1k  touch={self._hit_vertex / max(self._term_window_steps, 1) * 1000:.0f}  tilt={self._hit_tilt / max(self._term_window_steps, 1) * 1000:.0f}  h_low={self._hit_height_low / max(self._term_window_steps, 1) * 1000:.0f}  swing={self._hit_swing / max(self._term_window_steps, 1) * 1000:.0f}  vel={self._hit_vel_track / max(self._term_window_steps, 1) * 1000:.0f}  body_contact_force={float(np.mean(base_body_contact_force)):.2f}({float(np.max(base_body_contact_force)):.2f})  base_h={base_h_mean:.3f}")
+        print(f"  [term]  mode={'tilt_only' if self._term_loosened else 'full'}  rate={((self._term_vertex + self._term_tilt + self._term_height_low + self._term_swing) / max(self._term_window_steps, 1) * 1000):.1f}/1k  touch={self._hit_vertex / max(self._term_window_steps, 1) * 1000:.0f}  tilt={self._hit_tilt / max(self._term_window_steps, 1) * 1000:.0f}  h_low={self._hit_height_low / max(self._term_window_steps, 1) * 1000:.0f}  swing={self._hit_swing / max(self._term_window_steps, 1) * 1000:.0f}  body_contact_force={float(np.mean(base_body_contact_force)):.2f}({float(np.max(base_body_contact_force)):.2f})  base_h={base_h_mean:.3f}")
         print(f"  [info]  step={int(self._episode_steps.mean())}  total={self._total_steps}  cur={self._curriculum.scale:.2f}  vx_range=[{float(self._curriculum.cmd_vel_range[0, 0]):+.2f},{float(self._curriculum.cmd_vel_range[0, 1]):+.2f}]  yaw_range=[{float(self._curriculum.cmd_yaw_range[0]):+.2f},{float(self._curriculum.cmd_yaw_range[1]):+.2f}]  σ_ang={self._curriculum.tracking_sigma_ang:.2f}  σ_yaw={self._curriculum.tracking_sigma_yaw:.2f}"
               )
+        # ── 课程诊断：命令范围升降次数 ──
+        _promote_n, _demote_n = self._curriculum.pop_cmd_curriculum_stats()
+        _vr = np.asarray(self._curriculum.cmd_vel_range)
+        print(f"  [cmd_curriculum] promote={_promote_n} demote={_demote_n} (since last debug)  "
+              f"vx_range 全体均值=[{float(_vr[:, 0].mean()):+.2f},{float(_vr[:, 1].mean()):+.2f}]  "
+              f"最宽=[{float(_vr[:, 0].min()):+.2f},{float(_vr[:, 1].max()):+.2f}]")
+        _diag = getattr(self._curriculum, "_last_cmd_diag", None)
+        if _diag is not None and _diag["mean_tracking"].size > 0:
+            _mt = _diag["mean_tracking"]
+            _pr = _diag["participates"]
+            print(f"  [cmd_tracking] n={_mt.size}  mean_tracking: "
+                  f"p10={np.percentile(_mt, 10):.2f} p50={np.percentile(_mt, 50):.2f} p90={np.percentile(_mt, 90):.2f}  "
+                  f"bad(<0.4)={float((_mt < 0.4).mean()) * 100:.0f}%  good(>0.7)={float((_mt > 0.7).mean()) * 100:.0f}%  "
+                  f"参与={int(_pr.sum())}/{_mt.size}  cmd|vx|均值={float(_diag['cmd_speed_mean'].mean()):.2f}")
+        # ── 课程诊断：每种地形上的等级分布与升降（净变化，同段内升降相抵会漏计）──
+        # BaseSpawnManager（无地形课程）没有 enabled / levels，只有
+        # TerrainSpawnManager 才有，所以这里必须用 getattr 兜底。
+        if getattr(self._spawn, "enabled", False):
+            _types = np.asarray(self._spawn.get_terrain_type_for(np.arange(self._num_envs)))
+            _lv = np.asarray(self._spawn.levels)
+            _prev = getattr(self, "_terrain_lv_prev", None)
+            if _prev is None or _prev.shape != _lv.shape:
+                _d = np.zeros_like(_lv)
+            else:
+                _d = _lv - _prev
+            self._terrain_lv_prev = _lv.copy()
+            # 每种地形的速度范围：课程名义 → 地形夹紧后 → 本步实际采样
+            _vr_env = np.asarray(self._curriculum.cmd_vel_range_env)
+            _t_lo, _t_hi = get_terrain_cmdvx_limits(_types.tolist())
+            _eff_lo = np.maximum(_vr_env[:, 0], _t_lo)
+            _eff_hi = np.minimum(_vr_env[:, 1], _t_hi)
+            _cmd_vx = np.asarray(commands[:, 0], dtype=self._np_dtype)
+            _act_vx = np.asarray(local_linvel[:, 0], dtype=self._np_dtype)
+            _sig = float(self._curriculum.tracking_sigma_lin)
+            _trk = np.exp(-np.square(_cmd_vx - _act_vx) / _sig)
+            _parts = []
+            for _t in sorted(set(_types.tolist())):
+                _m = _types == _t
+                _parts.append(
+                    f"{_t:16s} n={int(_m.sum()):4d}  等级{float(_lv[_m].mean()):.1f}/{int(_lv[_m].max())}"
+                    f"  升{int((_d[_m] > 0).sum()):3d}降{int((_d[_m] < 0).sum()):3d}"
+                    f"  范围±{float(_eff_hi[_m].mean()):.2f}"
+                    f"  命令{float(np.abs(_cmd_vx[_m]).mean()):.2f}"
+                    f"  实跑{float(np.abs(_act_vx[_m]).mean()):.2f}"
+                    f"  跟踪{float(_trk[_m].mean()) * 100:.0f}%"
+                )
+            print("  [terrain] " + "  ".join(_parts))
         # ── Fudan-style jump stats：no state machine, show flight/vz/height ──
         vz_act = world_linvel[:, 2]
         was_in_flight = info.get("was_in_flight", np.zeros(self._num_envs, dtype=bool))
@@ -3848,12 +4173,45 @@ class BalanceInfantryJumpEnv(BalanceInfantryBaseEnv):
             t = self._update_state_timings
             b = info.get('timing', {})
             print(f"  [timing] total={t['total']:.1f}ms  sensor={t['sensor_read']:.1f}  jmp+cur={t['jump_curriculum']:.1f}  term={t['detect_term']:.1f}  kin={t['kinematics']:.1f}  info={t['populate_info']:.1f}  reward={t['compute_reward']:.1f}  obs={t['compute_obs']:.1f}")
-            print(f"  [step]   backend: physics={b.get('backend_physics_ms',0):.1f}ms  set_ctrl={b.get('backend_set_ctrl_ms',0):.1f}  refresh={b.get('backend_refresh_cache_ms',0):.1f}  apply_action={b.get('apply_action_ms',0):.1f}  reset_done={b.get('reset_done_ms',0):.1f}  env_step_total={b.get('env_step_total_ms',0):.1f}ms")
+            # ── solver 诊断 ──
+            _nc_mn, _nc_mx, _ne_mn, _ne_mx, _ni_mn, _ni_mx = -1.0, -1, -1.0, -1, -1.0, -1
+            _st_mn, _st_mx = -1.0, -1.0
+            try:
+                from unilab.base.backend.mujoco.backend import _sample_solver_stats as _jvf_sss
+                _stats = _jvf_sss(self._backend._model, self._backend._physics_state,
+                                  self._backend._num_envs, n_sample=32)
+                if _stats:
+                    _nc_mn, _nc_mx, _ne_mn, _ne_mx, _ni_mn, _ni_mx, _st_mn, _st_mx = _stats
+            except Exception:
+                pass
+            print(f"  [step]   backend: physics={b.get('backend_physics_ms',0):.1f}ms"
+                  f"  cpu/w={b.get('backend_pool_cpu_ratio',0):.2f}"
+                  f"  ss={b.get('backend_pool_substeps','-')}"
+                  f"  ncon={_nc_mx}/{_nc_mn:.0f}  nefc={_ne_mx}/{_ne_mn:.0f}"
+                  f"  niter={_ni_mx}/{_ni_mn:.0f}  mj_step_us={_st_mx:.0f}/{_st_mn:.0f}"
+                  f"  set_ctrl={b.get('backend_set_ctrl_ms',0):.1f}  refresh={b.get('backend_refresh_cache_ms',0):.1f}  apply_action={b.get('apply_action_ms',0):.1f}  reset_done={b.get('reset_done_ms',0):.1f}  env_step_total={b.get('env_step_total_ms',0):.1f}ms")
             if hasattr(self, '_obs_timings'):
                 o = self._obs_timings
                 print(f"  [obs breakdown] actor={o['actor_norm']:.1f}  critic_prep={o['critic_prep']:.1f}  height_scan={o['height_scan']:.1f}  fifo={o['fifo']:.1f}")
 
         print(f"  [JUMP/Fudan] in_flight={n_flight}  landing={n_landing}  fail={int(np.sum(info.get('jump_failure', np.zeros(self._num_envs, dtype=bool))))}  avg_air_time={avg_air_time:.3f}s  vz_max={float(np.max(vz_act)):+.3f}  vz_mean={float(np.mean(vz_act)):+.3f}  vz_up|J={vz_up_mean:.3f}  h_peak=(avg:{h_peak_mean:.3f} max:{h_peak_max:.3f} n:{h_peak_n})  push=(avg:{push_avg:.0f} peak:{push_peak:.0f})N  n_jump={n_jump}/{self._num_envs}  n_cmd={n_cmd_jump}  cd={n_cd}/{self._num_envs}  h_fail={n_h_fail}  v_fail={n_v_fail}  ok={n_ok_gate}  contact_filt={int(np.mean(info.get('contact_filt', np.zeros(self._num_envs)))*100)}%")
+
+        # ── 收腿诊断：跳跃中 env 的腿长分布 + leg_tuck 奖励实际值 ──
+        _jp = np.asarray(info.get("jump_in_progress", np.zeros(self._num_envs, dtype=bool)), dtype=bool)
+        _leg_l = np.asarray(info.get("leg_l", np.zeros(self._num_envs)), dtype=self._np_dtype)
+        _leg_r = np.asarray(info.get("leg_r", np.zeros(self._num_envs)), dtype=self._np_dtype)
+        _l0 = 0.5 * (_leg_l + _leg_r)
+        _tuck_raw = np.exp(-(np.abs(_leg_l - 0.17) + np.abs(_leg_r - 0.17)) * 4.0)
+        if np.any(_jp):
+            _l0j = _l0[_jp]
+            print(
+                f"  [tuck] J内 n={int(_jp.sum())}  L0: 均值={float(_l0j.mean()):.3f} 最小={float(_l0j.min()):.3f} 最大={float(_l0j.max()):.3f}"
+                f"  L0<0.20占比={float((_l0j < 0.20).mean()) * 100:.0f}%  L0<0.25占比={float((_l0j < 0.25).mean()) * 100:.0f}%"
+                f"  tuck_raw: 均值={float(_tuck_raw[_jp].mean()):.2f} 最大={float(_tuck_raw[_jp].max()):.2f}"
+                f"  (L0=0.17→1.00  L0=0.25→0.73  L0=0.37→0.45)"
+            )
+        else:
+            print("  [tuck] J内 n=0（此刻无跳跃中的 env）")
 
 
 registry.register_env("BalanceInfantryJumpvf", BalanceInfantryJumpEnv, sim_backend="motrix")

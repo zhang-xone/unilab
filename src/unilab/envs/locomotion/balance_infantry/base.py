@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
 import gymnasium as gym
 import numpy as np
 
@@ -33,12 +37,12 @@ DEFAULT_ANGLES: np.ndarray = np.array(
 )
 JOINT_ZERO_OFFSET = DEFAULT_ANGLES.copy()
 
-# 各关节的物理限位（来自 chassis.xml range 属性），顺序同 DEFAULT_ANGLES
+# 各关节的物理限位（来自 balance_infantry.xml 的 joint range 属性），顺序同 DEFAULT_ANGLES
 JOINT_LIMITS: np.ndarray = np.array(
-    [[-1.57, 2.40],     # left_front_joint
-     [-1.57, 2.40],     # right_front_joint
-     [-1.57, 1.57],     # left_rear_joint
-     [-1.57, 1.57],     # right_rear_joint
+    [[-2.27, 2.40],     # left_front_joint
+     [-2.27, 2.40],     # right_front_joint
+     [-2.62, 1.57],     # left_rear_joint
+     [-2.62, 1.57],     # right_rear_joint
      [-np.inf, np.inf], # left_wheel_joint
      [-np.inf, np.inf]],# right_wheel_joint
     dtype=np.float64,
@@ -67,6 +71,10 @@ def stack_joint_sensors(backend, suffix: str, *, dtype: np.dtype | type) -> np.n
 class NoiseConfig(BaseNoiseConfig):
     scale_vmc_phi0: float = 0.008
     scale_vmc_L0: float = 0.003
+    # θ̇ / L̇₀ 的噪声: 刻意不启用。
+    # 29 维 actor 观测不含这两列 (critic 用 noisy=False)，加噪只会在
+    # _vmc_obs_columns 里算完丢弃。要启用必须把这两列加进 actor 观测
+    # (33 维)，那会同时改变 checkpoint / deploy_obs / 量化导出契约。
     scale_vmc_phi0_dot: float = 0.3
     scale_vmc_L0_dot: float = 0.2
 
@@ -118,6 +126,175 @@ class VMCConfig:
 
 
 @dataclass
+class WheelTorqueSpeedConfig:
+    """轮子执行器扭矩-转速（功率）包络。
+
+    真机轮电机受功率限制，可用力矩随转速下降；恒力矩上限会让策略在 sim 里
+    学到“高速还能出满力矩”的行为。模型（默认解析式）：
+
+        τ_max(ω) = min(stall_torque, max_power / max(|ω|, eps))
+        |ω| >= max_speed 时 τ_max = 0
+
+    也可以用 ``torque_speed_curve``（[(speed_rad_s, torque_nm), ...]）直接给
+    M3508 这类实测曲线，此时忽略 stall/power/max_speed 的解析式。
+
+    默认 ``enabled=False``，保持旧行为；打开后只 clip 轮子力矩，不影响腿/奖励。
+    """
+
+    enabled: bool = False
+    stall_torque: float = 4.0
+    max_power: float = 100.0
+    max_speed: float = 60.0
+    torque_speed_curve: list[tuple[float, float]] = field(default_factory=list)
+    max_wheel_speed: float = 0.0
+    """>0 时把策略的轮速目标夹紧到 ±max_wheel_speed (rad/s)。"""
+
+    # 华南虎 M3508+C620 实测曲线（冷路径加载）。CSV 支持两种格式：
+    # 1) 华南虎格式：Motor_shaft_torque_Nm_ideal, Motor_shaft_speed_rpm
+    # 2) 简单两列：speed_rad_s, torque_nm
+    # 设置后优先于 torque_speed_curve；为空时用 inline 曲线/解析式。
+    curve_path: str = ""
+    curve_gear_ratio: float = 268.0 / 17.0
+    curve_gearbox_efficiency: float = 1.0
+
+
+class WheelTorqueEnvelope:
+    """按扭矩-转速包络裁剪轮子力矩（热路径只做插值/算术，不读文件）。"""
+
+    def __init__(self, cfg: WheelTorqueSpeedConfig):
+        self._cfg = cfg
+        self._enabled = bool(cfg.enabled)
+        if cfg.curve_path:
+            curve = self._load_curve_csv(cfg)
+        elif cfg.torque_speed_curve:
+            curve = np.asarray(cfg.torque_speed_curve, dtype=np.float64)
+        else:
+            curve = None
+        if curve is not None and curve.ndim == 2 and curve.shape[1] == 2 and len(curve) >= 2:
+            order = np.argsort(curve[:, 0])
+            speed = np.ascontiguousarray(curve[order, 0])
+            torque = np.maximum(np.ascontiguousarray(curve[order, 1]), 0.0)
+            if cfg.stall_torque > 0.0:
+                torque = np.minimum(torque, float(cfg.stall_torque))
+            self._curve_speed = speed
+            self._curve_torque = torque
+        else:
+            self._curve_speed = None
+            self._curve_torque = None
+
+    @staticmethod
+    def _load_curve_csv(cfg: WheelTorqueSpeedConfig) -> np.ndarray:
+        """冷路径加载华南虎 M3508 曲线或简单两列曲线。"""
+        path = Path(cfg.curve_path).expanduser()
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        if not path.exists():
+            raise FileNotFoundError(f"wheel torque-speed curve not found: {path}")
+
+        rows: list[tuple[float, float]] = []
+        with path.open(newline="") as csv_file:
+            reader = csv.reader(csv_file)
+            header = next(reader, None)
+            if header is None:
+                raise ValueError(f"wheel torque-speed curve is empty: {path}")
+            scut = any("Motor_shaft_torque" in str(h) for h in header) and any(
+                "Motor_shaft_speed" in str(h) for h in header
+            )
+            if scut:
+                headers = [str(h) for h in header]
+
+                def _find(token: str) -> int | None:
+                    return next((i for i, h in enumerate(headers) if token in h), None)
+
+                motor_torque_idx = _find("Motor_shaft_torque")
+                motor_speed_idx = _find("Motor_shaft_speed")
+                output_torque_idx = _find("Original_output_torque")
+                output_speed_idx = _find("Original_output_speed")
+                gear_ratio_idx = _find("Gear_ratio_used")
+                use_output = output_torque_idx is not None and output_speed_idx is not None
+                for row in reader:
+                    try:
+                        if use_output:
+                            # 优先用 CSV 自带的输出轴实测列，避免 gear_ratio 配置不一致
+                            output_torque = float(row[output_torque_idx])
+                            output_rpm = float(row[output_speed_idx])
+                            output_speed = output_rpm * 2.0 * np.pi / 60.0
+                        else:
+                            motor_torque = float(row[motor_torque_idx])
+                            motor_rpm = float(row[motor_speed_idx])
+                            if gear_ratio_idx is not None and row[gear_ratio_idx]:
+                                gear_ratio = float(row[gear_ratio_idx])
+                            else:
+                                gear_ratio = cfg.curve_gear_ratio
+                            if not np.isfinite(gear_ratio) or gear_ratio <= 0.0:
+                                continue
+                            output_torque = motor_torque * gear_ratio * cfg.curve_gearbox_efficiency
+                            output_speed = motor_rpm / gear_ratio * 2.0 * np.pi / 60.0
+                    except (IndexError, ValueError):
+                        continue
+                    rows.append((output_speed, output_torque))
+            else:
+                for row in [header, *reader]:
+                    if len(row) < 2:
+                        continue
+                    try:
+                        speed = float(row[0])
+                        torque = float(row[1])
+                    except ValueError:
+                        continue
+                    rows.append((speed, torque))
+
+        valid = [
+            (float(speed), float(torque))
+            for speed, torque in rows
+            if np.isfinite(speed + torque) and speed >= 0.0 and torque >= 0.0
+        ]
+        if len(valid) < 2:
+            raise ValueError(f"wheel torque-speed curve has too few valid points: {path}")
+        valid.sort(key=lambda item: item[0])
+        speed = np.asarray([item[0] for item in valid], dtype=np.float64)
+        torque = np.asarray([item[1] for item in valid], dtype=np.float64)
+        # np.interp 要求 x 严格递增；重复速度保留第一个点
+        unique_speed, unique_idx = np.unique(speed, return_index=True)
+        torque = torque[unique_idx]
+        if cfg.stall_torque > 0.0:
+            torque = np.minimum(torque, float(cfg.stall_torque))
+        return np.column_stack([unique_speed, torque])
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    def limit(self, torque: np.ndarray, omega: np.ndarray) -> np.ndarray:
+        """τ_max(ω) 的对称裁剪。torque / omega 形状相同（通常 (N, 2)）。"""
+        if not self._enabled:
+            return torque
+        abs_w = np.abs(np.asarray(omega, dtype=np.float64))
+        if self._curve_speed is not None and self._curve_torque is not None:
+            limit = np.interp(
+                abs_w,
+                self._curve_speed,
+                self._curve_torque,
+                left=float(self._curve_torque[0]),
+                right=0.0,
+            )
+        else:
+            limit = np.full_like(abs_w, float(self._cfg.stall_torque))
+            if self._cfg.max_power > 0.0:
+                limit = np.minimum(limit, self._cfg.max_power / np.maximum(abs_w, 1e-6))
+            if self._cfg.max_speed > 0.0:
+                limit = np.where(abs_w >= self._cfg.max_speed, 0.0, limit)
+        limit = np.maximum(limit, 0.0)
+        return np.clip(torque, -limit, limit)
+
+    def clamp_target(self, target: np.ndarray) -> np.ndarray:
+        """把轮速目标夹到 ±max_wheel_speed（速度目标侧的限制）。"""
+        if not self._enabled or self._cfg.max_wheel_speed <= 0.0:
+            return target
+        return np.clip(target, -self._cfg.max_wheel_speed, self._cfg.max_wheel_speed)
+
+
+@dataclass
 class ControlConfig(PdControlConfig):
     """PD 控制参数（每关节独立配置）。wheel_kd 长度 2：[LW, RW]。"""
     wheel_kd: tuple = (0.1, 0.1)
@@ -131,6 +308,7 @@ class ControlConfig(PdControlConfig):
     action_smoothing_range: tuple = (0.2, 1.0)
     action_delay_range: tuple = (0, 0)  # (min, max) substeps, FIFO 随机延迟
     obs_delay_range: tuple = (0, 0)     # (min, max) substeps, 观测延迟（默认跟随 action_delay_range）
+    wheel_torque_speed: WheelTorqueSpeedConfig = field(default_factory=WheelTorqueSpeedConfig)
     vmc: VMCConfig = field(default_factory=VMCConfig)
 
 
@@ -279,6 +457,47 @@ def vmc_mapping_fivebar(
     return tau1, tau4
 
 
+def vmc_feedforward_torques_no_ramp(
+    feedforward_force: np.ndarray,
+    theta: np.ndarray,
+    phi1: np.ndarray,
+    phi4: np.ndarray,
+    phi0: np.ndarray,
+    phi2: np.ndarray,
+    phi3: np.ndarray,
+    sigma1: np.ndarray,
+    L0: np.ndarray,
+    L1: float,
+    L4: float,
+    num_envs: int,
+    dtype: Any,
+) -> np.ndarray:
+    """无力期专用腿力矩：F = ff / cos(θ)（**不减淡**），Tp = 0，轮子列为 0。
+
+    用来模拟真实机器人断电后"内部机械力把腿自然蹬出"的行为，所以这里不乘
+    ``_compute_vmc_torques`` 里那个按 ``|θ|`` 淡出的 ramp：腿折得越狠，前馈
+    反而越要顶住，而不是淡到 0。
+
+    数值安全：``vmc_mapping_fivebar`` 内部对 ``σ₁`` 有 1e-8 保护、并把 ``±inf``
+    夹到 ±40，因此深折叠时只会顶到力矩上限（相当于机械限位），不会产生
+    inf/nan。
+
+    Returns:
+        vmc_torques: shape (num_envs, NUM_BALANCE_ACTIONS)，只有 4 个腿关节非零。
+    """
+    F = feedforward_force.reshape(-1, 1) / np.cos(np.clip(theta, -1.5, 1.5))
+    tau1, tau4 = vmc_mapping_fivebar(
+        F, np.zeros_like(F), phi1, phi4, phi0, phi2, phi3, sigma1, L0, L1, L4
+    )
+
+    vmc_torques = np.zeros((num_envs, NUM_BALANCE_ACTIONS), dtype=dtype)
+    vmc_torques[:, 0] = tau4[:, 0]   # τ₄ → LF (左前)
+    vmc_torques[:, 1] = tau4[:, 1]   # τ₄ → RF (右前)
+    vmc_torques[:, 2] = tau1[:, 0]   # τ₁ → LR (左后)
+    vmc_torques[:, 3] = tau1[:, 1]   # τ₁ → RR (右后)
+    return vmc_torques
+
+
 def compute_vmc_torques_fivebar(
     phi1: np.ndarray,
     phi4: np.ndarray,
@@ -382,6 +601,19 @@ class BalanceInfantryBaseEnv(LocomotionBaseEnv):
         if provider is not None:
             return provider._get_curriculum_scale(self)
         return 1.0
+
+    def _noisy_attitude(self, gravity_body: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """带噪声的姿态观测 (pitch, roll)。
+
+        噪声作用在重力向量上，再由同一个重力向量解算 pitch/roll，语义与
+        go1/go2 的 ``scale_gravity`` 一致；不要直接给角度加噪，否则会破坏
+        pitch/roll 与重力方向的对应关系。
+        训练侧 critic 仍然使用无噪姿态（privileged）。
+        """
+        noisy_gravity = self._obs_noise(gravity_body, self._cfg.noise_config.scale_gravity)
+        pitch = np.arcsin(np.clip(noisy_gravity[:, 0], -1.0, 1.0)).reshape(-1, 1)
+        roll = np.arcsin(np.clip(-noisy_gravity[:, 1], -1.0, 1.0)).reshape(-1, 1)
+        return pitch, roll
 
     def _obs_noise(self, data: np.ndarray, scale: float) -> np.ndarray:
         level = float(self._cfg.noise_config.level)

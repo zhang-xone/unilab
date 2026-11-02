@@ -1,24 +1,35 @@
+./start-dsh.sh
+
+echo "$USER ALL=(ALL) NOPASSWD: /usr/sbin/shutdown, /usr/sbin/poweroff" \
+  | sudo tee /etc/sudoers.d/shutdown-nopasswd
+sudo chmod 440 /etc/sudoers.d/shutdown-nopasswd
+
 PYTHONUNBUFFERED=1 uv run train \
   --algo ppo_sequence \
-  --task balance_infantry_joystick_flat \
+  --task balance_infantry_jump_fudan_flat \
   --sim mujoco \
-  algo.max_iterations=3000 \
+  algo.max_iterations=6000 \
   algo.num_steps_per_env=48 \
   training.no_play=true \
   training.logger=tensorboard
-
+  rc=$?
+  sync
+  echo "[$(date '+%F %T')] 训练结束 rc=$rc，1 分钟后关机"
+  sudo -n /usr/sbin/shutdown -h +1 "训练结束 rc=$rc，自动关机"
+  
   balance_infantry_jumpv0_flat
   balance_infantry_joystick_flat
   balance_infantry_jump_fudan_flat
   balance_infantry_jumpv0_flat_pretrain
+  balance_infantry_joystick_vmc_flat
   motrix mujoco
 PYTHONUNBUFFERED=1 uv run train \
   --algo ppo_sequence \
-  --task  balance_infantry_joystick_flat \
+  --task  balance_infantry_jump_fudan_flat \
   --sim mujoco \
-  algo.load_run="2026-10-16_10-19-08_mujoco" \
+  algo.load_run="2026-10-29_14-29-31_mujoco" \
   algo.checkpoint=-1 \
-  algo.max_iterations=3000 \
+  algo.max_iterations=6000 \
   algo.num_steps_per_env=48 \
   training.no_play=true\
   training.logger=tensorboard
@@ -27,10 +38,10 @@ PYTHONUNBUFFERED=1 uv run train \
 
 uv run scripts/play_interactive.py \
   --algo ppo_sequence \
-  --task balance_infantry_joystick_flat \
+  --task balance_infantry_jump_fudan_flat \
   --sim mujoco \
   algo.load_run=-1\
-  algo.checkpoint=-1 \
+  algo.checkpoint=5500 \
   interactive.action_mode=policy \
   interactive.keyboard=true \
   +interactive.require_keyboard_command_obs=false \

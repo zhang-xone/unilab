@@ -1,0 +1,284 @@
+# @package _global_
+training:
+  task_name: BalanceInfantryJumpvf
+  sim_backend: mujoco
+  play_steps: 1000
+  play_env_num: 16
+  render_spacing: 0.0
+  cam_tracking: true
+  cam_tracking_env_idx: 0
+  cam_tracking_extra_envs: 3
+interactive:
+  action_mode: policy
+  policy_obs_mode: auto
+  camera_follow_body: true
+  use_env_visual_model: false
+algo:
+  num_envs: 2048
+  num_steps_per_env: 48
+  max_iterations: 1000
+  obs_history_length: 5
+  empirical_normalization: true
+  policy:
+    init_noise_std: 1.5
+    num_encoder_obs: 145
+    latent_dim: 3
+    encoder_hidden_dims: [128, 64]
+    actor_hidden_dims: [128, 64 ,32]
+    critic_hidden_dims: [256, 128, 64]
+    activation: elu
+    orthogonal_init: true
+    obs_normalization: true
+    use_real_vel: false
+  algorithm:
+    learning_rate: 10.0e-4
+    extra_learning_rate: 4.0e-4
+    encoder_grad_norm: 0.1
+    entropy_coef: 10.0e-3
+    schedule: "adaptive"
+    desired_kl: 0.005
+
+env:
+  obs_vel: false
+  obs_manual_norm: false
+  scene:
+    #model_file: src/unilab/assets/robots/balance_infantry/scene_rmuc.xml
+    #model_file: src/unilab/assets/robots/balance_infantry/scene_crawl_slope.xml
+    #model_file: src/unilab/assets/robots/balance_infantry/scene_flat_slope.xml
+    #model_file: src/unilab/assets/robots/balance_infantry/balance_infantry.xml
+    #model_file: src/unilab/assets/robots/balance_infantry/scene_flat.xml
+    terrain:
+      generator:
+        curriculum: true
+        size: [8.0, 8.0]
+        num_rows: 5
+        num_cols: 6
+        border_width: 1.0
+        add_lights: true
+        horizontal_scale: 0.1
+        selected_terrain_types: ["flat", "hf_pyramid_slope", "pyramid_stairs", "random_rough"]
+      hfield_name: terrain_hfield
+      geom_name: floor
+    # terrain: ~
+    # fragment_files: []
+  terrain_scan:
+    enabled: true
+    geom_name: floor
+    measured_points_x: [-0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3]
+    measured_points_y: [-0.1, 0.0, 0.1]
+  terrain_curriculum:
+    enabled: true
+    init_level: 1
+    randomize_init_level: true
+    promote_frac: 0.3
+    demote_frac: 0.1
+    spawn_height_margin: 0.05
+    curriculum_mode: "hybrid"
+    type_curriculum_enabled: false
+    type_curriculum_switch_interval: 200
+  debug_enabled: true
+  sim_dt: 0.005
+  ctrl_dt: 0.01
+  sensor:
+    gyro: gyro
+    accel: accel
+    local_linvel: local_linvel
+    upvector: upvector
+    base_height_rangefinder: base_height_rangefinder
+  commands:
+    vel_limit:
+      - [-3.0, 0, -8.0]
+      - [3.0, 0, 8.0]
+    cmd_curriculum_enabled: true
+    jump_curriculum_enabled: false         # 是否开启跳跃 curriculum（独立于 cmd_curriculum_enabled）
+    initial_vel_range: [-1.0, 1.0]  # 初始速度范围
+    initial_yaw_range: 1.0           # 初始 yaw 范围，随 curriculum 等比扩大至 4.0
+    height_limit:
+      - 0.20
+      - 0.38
+    resampling_time: 6.0
+    rel_standing_envs: 0.0   # 站着不动
+    cmd_curriculum_sustain_threshold: 1  # 连续通过次数（与 joystick 对齐）
+    cmd_curriculum_sustain_threshold_bad: 1  # 连续失败次数才降速（与 joystick 对齐）
+    auto_jump_threshold: 0.00     # 测距触发自动跳跃阈值 (m)，设 0 关闭
+  control_config:
+    wheel_kd: [0.1, 0.1]
+    clip_actions: 100.0
+    action_delay_range: [1, 1]       # FIFO 随机延迟子步数（sim_dt 每步）
+    obs_delay_range: [0, 0]         # 观测延迟（默认跟随 action_delay_range）
+    leg_kp: [40, 40, 40, 40]
+    leg_kd: [3.0, 3.0, 3.0, 3.0]
+    action_scale_joint: 0.5
+    action_scale_wheel: 20.0
+    vmc:
+      L1: 0.215
+      L2: 0.254
+      L3: 0.254
+      L4: 0.215
+      L5: 0.0
+      feedforward_force: 00.0
+      ff_anneal_target: 00.0
+    action_smoothing: 1.0            # 1.0=无滤波
+  noise_config:
+    level: 1.0
+    scale_joint_angle: 0.025
+    scale_joint_vel: 1.5
+    scale_gyro: 0.25
+    scale_gravity: 0.05
+    scale_linvel: 0.1
+    scale_vmc_phi0: 0.02
+    scale_vmc_L0: 0.004
+    scale_vmc_phi0_dot: 0.2
+    scale_vmc_L0_dot: 0.1
+  domain_rand:
+    randomize_base_mass: true
+    added_mass_range: [-4.0, -4.0]
+    randomize_body_mass: true
+    body_mass_multiplier_range: [0.9, 1.1]
+    random_com: false
+    com_offset_x: [-0.04, 0.04]
+    com_offset_y: [-0.03, 0.03]
+    com_offset_z: [-0.03, 0.03]
+    randomize_ground_friction: false
+    ground_friction_multiplier_range: [0.4, 1.6]
+    randomize_wheel_ground_friction: false
+    wheel_ground_friction_range: [0.4, 1.6]
+    randomize_geom_solref: true
+    geom_solref_timeconst_range: [0.02, 0.04]
+    geom_solref_dampratio_range: [0.5, 0.9]
+    randomize_vmc_ff: true  
+    vmc_ff_multiplier_range: [0.95, 1.05]
+    randomize_wheel_kd: true
+    wheel_kd_multiplier_range: [0.9, 1.1]
+    randomize_kp: true
+    randomize_kd: true
+    kp_multiplier_range: [0.9, 1.1]
+    kd_multiplier_range: [0.9, 1.1]
+    randomize_motor_torque: true
+    torque_scale_range: [0.8, 1.05]
+    actuator_noise: false
+    actuator_noise_std_range: [0.0, 0.0]
+    randomize_inertia: true
+    inertia_multiplier_range: [0.9, 1.1]
+    randomize_dof_armature: true
+    dof_armature_multiplier_range: [0.9, 1.2]
+    randomize_joint_friction: true
+    damping_multiplier_range: [0.4, 1.2]
+    frictionloss_multiplier_range: [0.4, 1.2]
+    randomize_default_dof_pos: true
+    randomize_default_dof_pos_range: [-0.05, 0.05]
+    push_robots: true
+    push_interval_initial: 1000
+    push_interval_final: 700
+    max_force: [50.0, 50.0, 25.0]
+    leg_max_force: [ 50.0, 50.0, 15.0]
+    push_body_name: "base_link"
+    # ---- 课程学习：从 step=warmup 开始从 initial_scale 增长到 full_steps 时达到 1.0 ----
+    curriculum_enabled: true
+    curriculum_warmup_steps: 0000        # 前 4800 步用最小扰动，50个Learning iteration
+    curriculum_full_steps: 19200          # 2400步每100个Learning iteration）800 Learning iteration达到最大
+    curriculum_initial_scale: 0.0         # 初始扰动强度：只有 5% 的最大力
+    curriculum_shape: "smooth"             # linear / smooth / quadratic
+reward:
+  scales:
+    # ══ 复旦 Isaac 原版（wheel_legged_gym LeggedRobotCfg.rewards.scales, L185-210）══
+    # 跳跃门控仍走本环境的 jump_in_progress（复旦原版是 was_in_flight）
+    tracking_lin_vel: 2.0      # 原版 1.0；原式 exp(-err²/σ)*2，本实现无 ×2 → 2.0 才等效果
+    tracking_ang_vel: 1.0
+    flight: 0.6
+    encourage_jump: 2.0        # tanh(2·vz) 值域[-0.2,1] → 上限 1.0，仍是跳跃项里最小的
+    base_height_flight: 12.0
+    leg_tuck: 9                   # 复旦 1.7；去掉裁剪后需与 base_height_flight 同量级
+    wheel_air_height: 4.0
+    takeoff_extend: 2.0
+    line_z: 12.0
+    # 轮子离地高度：跳窗口内两轮离地时按轮底高度线性给分（0 → 1）。
+    # 与 flight 同门控，但连续可微，用来给"跳更高"提供梯度。
+    swing_vertical: -1.5      # 复旦 pen_theta_no0：腿收到正下方（绝对摆角）
+    nominal_state: -1.0       # 复旦 nominal_state：Δθ² + 10·ΔL0²（含左右腿长差约束）
+    swing_symmetry: 0.0       # 你的饱和式 θ 差惩罚，暂时停用（θ 部分已由 nominal_state 覆盖）
+    tracking_lin_vel_precise: 0.4  # 复旦 tracking_lin_vel_enhance（恒 ≤0，误差越大越负）
+    action_rate: -0.02
+    action_smooth: -0.0
+    torques: -5.0e-5
+    orientation: -25.0
+    ang_vel_xy: -0.1
+    collision: -1.0
+
+    # 跳跃中 base_height 被 jump_in_progress 置 0；base_height_precise 在离地且高于起跳高度时给满
+    base_height: -1.5
+    base_height_precise: 0.5
+    tracking_lin_vel_quad: -0.3   # 二次惩罚，弥补 exp 在大误差处梯度消失（推荐 -0.3）
+    swing_vel: -0.02
+    
+    # ── 复旦原版没有的其它项：显式置 0（保留 key 便于回退，不做删除）──
+    tilt_precise: 0.0
+    tracking_yaw: 0.0
+    tracking_ang_vel_precise: 0.0
+    tracking_ang_vel_quad: 0.0
+    wheel_slip: 0.0
+    body_corner_clearance: 0.0
+    vertex_penalty: 0.0
+    wheel_contact: 0.0
+    lin_vel_z: 0.0
+    air_wheel_penalty: 0.0
+    leg_length_rate: 0.0
+    stand: 0.0
+    push_force: 0.0
+    jump_failure: 0.0
+    crash_landing: 0.0
+    dof_acc: 0.0
+
+  # ── 单奖励裁剪：已关闭（0 = 不裁剪，直接加权求和）──
+  # 复旦原版 clip_single_reward = 2.5，语义 = clip(f*scale, ±2.5) 再整体 ×ctrl_dt。
+  # 开着裁剪时，任何权重一旦把 f*scale 顶过 2.5 就恒饱和、梯度归零
+  # （leg_tuck 7.2 / base_height_flight 24 / line_z 24 三项都是这样失效的）。
+  # 现在改为直接加权求和（与华南虎一致）：权重 = 最终幅度，各项量级需自行配平。
+  clip_range: 0.0
+
+  powerless_curriculum_threshold: 0.25 # curriculum progress 超此值启用无力期
+  powerless_probability: 0.15          # 无力期概率（从 0.2 降到 0.1）
+  powerless_duration: 0.9             # 无力时长 秒（从 1.0 降到 0.5）
+  # ── 原地旋转模式：|cmdvyaw| > 2.0 时自动进入（vx=0, 开启stand惩罚）──
+  # ── 精确奖励参数 ──
+  tilt_precise_sigma: 0.07          # 4°=0.07rad，tilt=4°时奖励=exp(-1)=0.37
+  # ── 跳跃命令 ──────────────────────
+  jump_prob: 0.8                    # 跳跃概率（resample 时有 80% 概率采样 jump）
+  jump_stand_height: 0.2            # 旧字段（已失效，见下一行）；保留兼容
+  jump_stand_height_range: [0.20, 0.30]   # 进入跳跃时高度目标重采样区间 [lo, hi]
+  # ── 起跳门控 ──────────────────────
+  jump_height_error_max: 0.1      # 高度误差上限 (m)，达标才给跳跃命令
+  jump_lin_vel_error_max: 1.0       # 速度误差上限 (m/s)
+  jump_height_play: 1
+  # ── leg_tuck 起跳窗口（本环境扩展，非复旦原逻辑）──────
+  # 门控 = jump_in_progress & (was_in_flight | (h > 高度阈值 & vz > 垂速阈值))
+  # 作用：去掉 was_in_flight 的两步去抖，离地当步即给收腿奖励
+  leg_tuck_reach_height: 0.32      # 机体离地高度阈值 (m)
+  leg_tuck_reach_vz: 0.20          # 竖直速度阈值 (m/s)，同时保证下落段自动关闭
+  lift_force_max: 0.0  # 初期竖直辅助拉力(N)，随curriculum归零
+  tracking_sigma: 0.25
+  tracking_sigma_dynamic: false   # 复旦是固定 σ（exp(-err²/σ)），不随 cmd 放大
+  tracking_sigma_lin: 0.25
+  tracking_sigma_ang: 0.25
+  tracking_sigma_yaw: 0.25
+  base_height_sigma: 0.12         # σ：err=10cm 拿 37%
+  vz_threshold: 0.15              # 通用垂直速度阈值 (m/s)：base_height_precise 跳跃门控 / jump_failure no_vz / takeoff_extend 蹬伸判定共用
+  jump_enter_height_range: [0.20, 0.30]  # 判定≠进入：base_height 落进这个固定区间才算真正进入跳跃
+  leg_length_sigma: 0.12          # σ：腿长误差2cm拿 37%
+  body_corner_clearance_threshold: 0.09  # 角点离地 < 此值（m）开始惩罚
+  stand_cmd_linvel_threshold: 0.10
+  stand_cmd_angvel_threshold: 0.10
+  stand_tilt_threshold: 0.192  # ≈11°
+  stand_vel_weight: 1.0          # 站立惩罚中水平速度项权重
+  stand_angvel_weight: 0.5       # 站立惩罚中角速度项权重
+  stand_linvelz_weight: 0.5      # 站立惩罚中垂直速度项权重
+  # ── 终止条件 ──
+  tilt_limit_tight: 1.0
+  swing_angle_limit: 1.0
+  min_height_tight: 0.10
+  # 课程完成后的终止收敛：生效后只剩 tilt（翻车）终止 + 地形出界，
+  # vertex_touch / swing / min_height 三种姿态终止关闭（命中仍计数，仅不再终止）。
+  # from_step 是控制步（每 iter = num_steps_per_env=48 步）：48000≈1000 iter，96000≈2000 iter，0=立即。
+  term_loosen_enabled: true
+  term_loosen_from_step: 0
+  air_spawn_max_height: 0.10    # 空中出生最大高度（m），随 curriculum 从 0 渐进
